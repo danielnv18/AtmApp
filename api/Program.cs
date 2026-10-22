@@ -1,9 +1,11 @@
+using AtmApp.Api.Application;
 using AtmApp.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddDbContext<AtmDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Atm")));
 

@@ -7,6 +7,7 @@ public sealed class Account
     public decimal Balance { get; private set; }
     public Guid ConcurrencyVersion { get; private set; }
 
+    // For EF Core materialization only; code creates accounts through Open.
     private Account() { }
 
     public static Account Open(string name, decimal openingBalance = 0m) => new()
@@ -36,6 +37,8 @@ public sealed class Account
 
     private Transaction Apply(Money amount, TransactionType type, DateTimeOffset timestampUtc, Guid? correlationId, string? description)
     {
+        // A new version marks this balance as changed, so a concurrent writer that loaded the
+        // old version is rejected by the database (see AtmDbContext's concurrency token).
         ConcurrencyVersion = Guid.NewGuid();
         return Transaction.Create(Id, amount, Balance, type, correlationId, timestampUtc, description);
     }

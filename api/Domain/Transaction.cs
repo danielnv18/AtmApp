@@ -11,6 +11,7 @@ public sealed class Transaction
     public DateTimeOffset TimestampUtc { get; private init; }
     public string? Description { get; private init; }
 
+    // For EF Core materialization only; ledger rows are created by Account through Create.
     private Transaction() { }
 
     internal static Transaction Create(

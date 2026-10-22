@@ -7,28 +7,13 @@ namespace AtmApp.Api.Tests.Infrastructure;
 
 public sealed class PersistenceTests : IAsyncLifetime
 {
-    private readonly string _path = Path.Combine(Path.GetTempPath(), $"atm-test-{Guid.NewGuid():N}.db");
+    private readonly TestDatabase _database = new();
 
-    private AtmDbContext NewContext() => new(new DbContextOptionsBuilder<AtmDbContext>()
-        .UseSqlite($"Data Source={_path};Default Timeout=5")
-        .Options);
+    private AtmDbContext NewContext() => _database.NewContext();
 
-    public async Task InitializeAsync()
-    {
-        await using var db = NewContext();
-        await DatabaseInitializer.InitializeAsync(db, TimeProvider.System);
-    }
+    public Task InitializeAsync() => _database.InitializeAsync();
 
-    public Task DisposeAsync()
-    {
-        SqliteConnection.ClearAllPools();
-        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
-        {
-            File.Delete(_path + suffix);
-        }
-
-        return Task.CompletedTask;
-    }
+    public Task DisposeAsync() => _database.DisposeAsync();
 
     [Fact]
     public async Task First_start_seeds_two_accounts_each_with_an_opening_deposit()
