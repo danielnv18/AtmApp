@@ -4,18 +4,18 @@
 
 ## Run
 
-API (http://localhost:5233):
+API (http://localhost:5000):
 
 ```sh
 cd api
 dotnet run --launch-profile http
 ```
 
-Swagger UI (Development only): http://localhost:5233/swagger
+Swagger UI (Development only): http://localhost:5000/swagger
 
-OpenAPI document: http://localhost:5233/openapi/v1.json
+OpenAPI document: http://localhost:5000/openapi/v1.json
 
-Client (http://localhost:5173):
+Client (http://localhost:5173), which proxies `/api` to the API:
 
 ```sh
 cd client
