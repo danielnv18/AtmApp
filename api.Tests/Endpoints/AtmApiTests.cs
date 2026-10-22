@@ -248,6 +248,7 @@ public sealed class AtmApiTests : IAsyncLifetime
     [InlineData("MTIzOmFiYw")]
     [InlineData("MA")]
     [InlineData("LTE")]
+    [InlineData("A")]
     public async Task Tampered_cursor_is_a_400_with_title_and_detail(string cursor)
     {
         var response = await _client.GetAsync($"/api/atm/accounts/{_checking}/history?cursor={cursor}");
@@ -280,6 +281,117 @@ public sealed class AtmApiTests : IAsyncLifetime
         Assert.True(balance >= 0, $"balance {balance} is negative");
         Assert.Equal(1000m - 100m * succeeded, balance);
         Assert.Equal(succeeded, withdrawals);
+    }
+
+    [Fact]
+    public async Task Concurrent_opposite_transfers_conserve_money_and_keep_both_ledgers_consistent()
+    {
+        var requests = Enumerable.Range(0, 20).Select(i => i % 2 == 0
+            ? (From: _checking, To: _savings)
+            : (From: _savings, To: _checking));
+
+        var responses = await Task.WhenAll(requests.Select(r => Task.Run(() =>
+            _client.PostAsJsonAsync("/api/atm/transfer", new { fromAccountId = r.From, toAccountId = r.To, amount = 100m }))));
+
+        Assert.All(responses, r => Assert.Contains((int)r.StatusCode, new[] { 200, 409, 422 }));
+        var receipts = await Task.WhenAll(responses.Where(r => r.StatusCode == HttpStatusCode.OK).Select(r => r.ReadAsync<TransferView>()));
+        var checkingBalance = await BalanceAsync(_checking);
+        var savingsBalance = await BalanceAsync(_savings);
+        var checkingLedger = await LedgerAsync(_checking);
+        var savingsLedger = await LedgerAsync(_savings);
+
+        Assert.Equal(1500.00m, checkingBalance + savingsBalance);
+        AssertGaplessChain(checkingLedger, checkingBalance);
+        AssertGaplessChain(savingsLedger, savingsBalance);
+        var rows = checkingLedger.Concat(savingsLedger).ToList();
+        Assert.All(receipts, receipt =>
+        {
+            var linked = rows.Where(t => t.CorrelationId == receipt.CorrelationId).ToList();
+            Assert.Equal(["Deposit", "Withdrawal"], linked.Select(t => t.Type).Order());
+            Assert.NotEqual(linked[0].AccountId, linked[1].AccountId);
+        });
+        Assert.Equal(receipts.Length * 2, rows.Count(t => t.CorrelationId is not null));
+    }
+
+    [Fact]
+    public async Task Concurrent_deposits_each_write_one_row_and_the_balance_adds_up()
+    {
+        var amounts = Enumerable.Range(1, 20).Select(i => (decimal)i).ToList();
+
+        var responses = await Task.WhenAll(amounts.Select(amount => Task.Run(async () =>
+            (amount, response: await _client.PostAsJsonAsync("/api/atm/deposit", new { accountId = _checking, amount })))));
+
+        Assert.All(responses, r => Assert.Contains((int)r.response.StatusCode, new[] { 200, 409 }));
+        var succeeded = responses.Where(r => r.response.StatusCode == HttpStatusCode.OK).Select(r => r.amount).ToList();
+        var balance = await BalanceAsync(_checking);
+        var ledger = await LedgerAsync(_checking);
+
+        Assert.Equal(1000m + succeeded.Sum(), balance);
+        Assert.Equal(succeeded.Order(), ledger.SkipLast(1).Select(t => t.Amount).Order());
+        AssertGaplessChain(ledger, balance);
+    }
+
+    // Read newest-first over the wire: each row must extend the one before it by exactly its amount,
+    // starting from the opening deposit, and end on the account's current balance.
+    private static void AssertGaplessChain(IReadOnlyList<LedgerRowView> newestFirst, decimal balance)
+    {
+        var running = 0m;
+        foreach (var row in newestFirst.Reverse())
+        {
+            running += row.Type == "Deposit" ? row.Amount : -row.Amount;
+            Assert.Equal(running, row.BalanceAfter);
+        }
+
+        Assert.Equal(balance, newestFirst[0].BalanceAfter);
+    }
+
+    [Fact]
+    public async Task Transfer_rows_carry_the_descriptions_the_client_displays()
+    {
+        var response = await _client.PostAsJsonAsync("/api/atm/transfer",
+            new { fromAccountId = _checking, toAccountId = _savings, amount = 100m });
+        var receipt = await response.ReadAsync<TransferView>();
+
+        var withdrawal = (await LedgerAsync(_checking))[0];
+        var deposit = (await LedgerAsync(_savings))[0];
+
+        Assert.Equal((receipt.CorrelationId, "Withdrawal", "Transfer to Savings"), (withdrawal.CorrelationId, withdrawal.Type, withdrawal.Description));
+        Assert.Equal((receipt.CorrelationId, "Deposit", "Transfer from Checking"), (deposit.CorrelationId, deposit.Type, deposit.Description));
+    }
+
+    [Fact]
+    public async Task History_without_a_limit_returns_the_newest_50_rows_and_a_cursor()
+    {
+        LedgerRowView? newest = null;
+        for (var i = 0; i < 50; i++)
+        {
+            newest = await (await _client.PostAsJsonAsync("/api/atm/deposit", new { accountId = _checking, amount = 1m }))
+                .ReadAsync<LedgerRowView>();
+        }
+
+        var page = await _client.GetAsync<HistoryView>($"/api/atm/accounts/{_checking}/history");
+        var rest = await _client.GetAsync<HistoryView>($"/api/atm/accounts/{_checking}/history?cursor={page.NextCursor}");
+
+        Assert.Equal(50, page.Items.Count);
+        Assert.Equal(newest!.Id, page.Items[0].Id);
+        Assert.NotNull(page.NextCursor);
+        Assert.Equal("Opening deposit", Assert.Single(rest.Items).Description);
+        Assert.Null(rest.NextCursor);
+    }
+
+    [Fact]
+    public async Task History_contains_only_the_requested_accounts_rows()
+    {
+        var response = await _client.PostAsJsonAsync("/api/atm/deposit", new { accountId = _savings, amount = 7m });
+        var deposit = await response.ReadAsync<LedgerRowView>();
+
+        var checking = await LedgerAsync(_checking);
+        var savings = await LedgerAsync(_savings);
+
+        Assert.Contains(savings, t => t.Id == deposit.Id);
+        Assert.DoesNotContain(checking, t => t.Id == deposit.Id);
+        Assert.All(checking, t => Assert.Equal(_checking, t.AccountId));
+        Assert.All(savings, t => Assert.Equal(_savings, t.AccountId));
     }
 
     [Fact]
