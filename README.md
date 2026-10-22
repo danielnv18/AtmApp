@@ -2,49 +2,27 @@
 
 .NET 10 minimal API (`api/`) + Vue 3 client (`client/`).
 
-`AtmApp.slnx` at the repo root holds the API (`api/AtmApp.Api.csproj`) and its tests (`api.Tests/AtmApp.Api.Tests.csproj`).
+## Prerequisites
 
-## Setup
+- [.NET SDK 10](https://dotnet.microsoft.com/download)
+- [Node.js](https://nodejs.org) 22.18 or later, or 24.12 or later
 
-Restore the pinned `dotnet-ef` tool (`.config/dotnet-tools.json`, the same version as the EF Core packages):
+## Run the app
 
-```sh
-dotnet tool restore
-dotnet ef migrations list --project api
-```
-
-## Build and test
-
-From the repo root:
+Clone the repository:
 
 ```sh
-dotnet build AtmApp.slnx
-dotnet test AtmApp.slnx
+git clone <repository-url> AtmApp
+cd AtmApp
 ```
 
-Run one test class or test by name:
+Start the API in one terminal, from the repository root. It listens on http://localhost:5000. On first start it creates the database `api/atm.db` and seeds Checking with $1,000.00 and Savings with $500.00.
 
 ```sh
-dotnet test AtmApp.slnx --filter "FullyQualifiedName~AtmApiTests"
-dotnet test AtmApp.slnx --filter "FullyQualifiedName~Parallel_withdrawals"
+dotnet run --project api
 ```
 
-The endpoint tests run the real app in memory through `WebApplicationFactory`. Each test gets its own temporary SQLite file, deleted afterwards, and a `FakeTimeProvider` clock. They read responses into records defined in the test project, so a change to the JSON contract fails a test.
-
-## Run
-
-API (http://localhost:5000):
-
-```sh
-cd api
-dotnet run --launch-profile http
-```
-
-Swagger UI (Development only): http://localhost:5000/swagger
-
-OpenAPI document: http://localhost:5000/openapi/v1.json
-
-Client (http://localhost:5173), which proxies `/api` to the API:
+Start the client in a second terminal, also from the repository root:
 
 ```sh
 cd client
@@ -52,28 +30,41 @@ npm install
 npm run dev
 ```
 
-Run each in its own terminal.
+Open http://localhost:5173. The client sends `/api` requests to the API, so keep both terminals running.
 
-`api/AtmApp.Api.http` has one request per route. Paste account ids from `GET /api/atm/accounts` into its variables.
+Press `Ctrl+C` in each terminal to stop.
 
-## Errors
+## Run the tests
 
-Every error is `application/problem+json` with `status`, `title`, and `detail`, in every environment:
+API tests, from the repository root:
 
-| Status | Cause |
-| --- | --- |
-| 400 | Invalid amount (0 or less, more than 2 decimal places, over 1,000,000,000.00), a same-account transfer, a malformed body or a missing field, or a history `limit` outside 1 to 200 or a bad `cursor`. |
-| 404 | Unknown account. |
-| 409 | Another request changed the account between read and write. Reload and retry. |
-| 422 | Insufficient funds. |
-| 500 | Unexpected failure. The body is generic and never includes exception details; the exception goes to the log. |
+```sh
+dotnet test AtmApp.slnx
+```
 
-A missing body field is a 400, never a default such as an empty account id. The API serves plain HTTP only, with no HTTPS redirect, because the client reaches it through the Vite proxy.
+Browser check. With the API and the client running, from `client/`:
 
-## Reset the database
+```sh
+npx playwright install chromium
+node scripts/verify-e2e.mjs
+```
 
-Stop the API, then delete this file in `api/`:
+The browser check withdraws $20 from Checking and saves a screenshot to `client/.verify/`.
 
-- `atm.db`
+## Reset the data
 
-The next `dotnet run` recreates it and seeds the opening accounts.
+Stop the API and delete `api/atm.db`. The next start recreates it with the opening balances.
+
+## API errors
+
+Errors are `application/problem+json` with `status`, `title`, and `detail`.
+
+| Status | Cause                                                                          |
+| ------ | ------------------------------------------------------------------------------ |
+| 400    | Invalid amount, same-account transfer, malformed body, or bad `limit`/`cursor` |
+| 404    | Unknown account                                                                |
+| 409    | Concurrent update. Retry.                                                      |
+| 422    | Insufficient funds                                                             |
+| 500    | Unexpected failure. No internal details.                                       |
+
+The Swagger UI is at http://localhost:5000/swagger while the API runs.
