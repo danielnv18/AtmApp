@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="api.Tests/AtmApp.Api.Tests.csproj" />
+  <Project Path="api/AtmApp.Api.csproj" />
+</Solution>

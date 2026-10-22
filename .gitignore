@@ -17,3 +17,6 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+
+# Browser verification output
+.verify/
