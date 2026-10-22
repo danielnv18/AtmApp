@@ -52,7 +52,7 @@ public class AtmDbContext(DbContextOptions<AtmDbContext> options) : DbContext(op
             // The ledger is the audit trail: deleting an account must never cascade away its history.
             transaction.HasOne<Account>().WithMany().HasForeignKey(t => t.AccountId).OnDelete(DeleteBehavior.Restrict);
             // One row per position in each account's chain; also serves the history query in order.
-            // The append-only and chain rules are triggers (see the AppendOnlyLedger migration). EF
+            // The append-only and chain rules are triggers (see the InitialCreate migration). EF
             // orders one SaveChanges' inserts by key, not by Add order, so save at most one new row
             // per account per SaveChanges or the chain trigger may see them out of sequence.
             transaction.HasIndex(t => new { t.AccountId, t.Sequence }).IsUnique();

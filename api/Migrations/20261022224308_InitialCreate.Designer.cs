@@ -11,8 +11,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AtmApp.Api.Migrations
 {
     [DbContext(typeof(AtmDbContext))]
-    [Migration("20261022223442_AppendOnlyLedger")]
-    partial class AppendOnlyLedger
+    [Migration("20261022224308_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

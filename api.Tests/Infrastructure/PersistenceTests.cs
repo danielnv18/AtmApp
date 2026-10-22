@@ -1,10 +1,7 @@
-using AtmApp.Api.Application;
 using AtmApp.Api.Domain;
 using AtmApp.Api.Infrastructure;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace AtmApp.Api.Tests.Infrastructure;
 
@@ -113,60 +110,6 @@ public sealed class PersistenceTests : IAsyncLifetime
             INSERT INTO "Transactions" ("Id", "AccountId", "Sequence", "Amount", "BalanceAfter", "Type", "TimestampUtc")
             VALUES ({id}, {accountId}, {sequence}, {amountCents}, {balanceAfterCents}, {type}, 0)
             """);
-    }
-
-    [Fact]
-    public async Task Migrating_an_existing_database_numbers_each_ledger_and_installs_the_guards()
-    {
-        var legacy = new TestDatabase();
-        try
-        {
-            var (a, b) = ("A0000000-0000-0000-0000-000000000000", "B0000000-0000-0000-0000-000000000000");
-            await using (var db = legacy.NewContext())
-            {
-                await db.GetService<IMigrator>().MigrateAsync("20261022215308_InitialCreate");
-                await db.Database.ExecuteSqlRawAsync(
-                    """
-                    INSERT INTO "Accounts" ("Id", "Name", "Balance", "ConcurrencyVersion") VALUES
-                        ('A0000000-0000-0000-0000-000000000000', 'A', 7500, 'C0000000-0000-0000-0000-000000000000'),
-                        ('B0000000-0000-0000-0000-000000000000', 'B', 5000, 'C0000000-0000-0000-0000-000000000000');
-                    INSERT INTO "Transactions" ("Id", "AccountId", "Amount", "BalanceAfter", "Type", "TimestampUtc", "Description") VALUES
-                        ('00000000-0000-0000-0000-000000000001', 'A0000000-0000-0000-0000-000000000000', 3000, 7000, 'Withdrawal', 20, 'a2'),
-                        ('00000000-0000-0000-0000-000000000002', 'A0000000-0000-0000-0000-000000000000', 10000, 10000, 'Deposit', 10, 'a1'),
-                        ('00000000-0000-0000-0000-000000000003', 'B0000000-0000-0000-0000-000000000000', 5000, 5000, 'Deposit', 20, 'b1'),
-                        ('00000000-0000-0000-0000-000000000004', 'A0000000-0000-0000-0000-000000000000', 500, 7500, 'Deposit', 20, 'a3');
-                    """);
-            }
-
-            await using (var db = legacy.NewContext())
-            {
-                await db.Database.MigrateAsync();
-            }
-
-            await using var verify = legacy.NewContext();
-            var ledger = await verify.Transactions
-                .OrderBy(t => t.AccountId).ThenBy(t => t.Sequence)
-                .Select(t => new { t.Description, t.Sequence })
-                .ToListAsync();
-            var lastSequences = await verify.Accounts.OrderBy(x => x.Name).Select(x => x.LastSequence).ToListAsync();
-            var triggers = await verify.Database
-                .SqlQueryRaw<string>("SELECT name AS \"Value\" FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
-                .ToListAsync();
-
-            Assert.Equal(
-                [("a1", 1L), ("a2", 2L), ("a3", 3L), ("b1", 1L)],
-                ledger.Select(t => (t.Description!, t.Sequence)));
-            Assert.Equal([3L, 1L], lastSequences);
-            Assert.Equal(["TR_Transactions_Chain", "TR_Transactions_NoDelete", "TR_Transactions_NoUpdate"], triggers);
-
-            var next = await new AccountService(verify, TimeProvider.System).WithdrawAsync(Guid.Parse(a), Money.Parse(75m));
-            Assert.Equal((4L, 0m), (next.Sequence, next.BalanceAfter));
-            Assert.Equal("b1", (await verify.Transactions.SingleAsync(t => t.AccountId == Guid.Parse(b))).Description);
-        }
-        finally
-        {
-            await legacy.DisposeAsync();
-        }
     }
 
     [Fact]

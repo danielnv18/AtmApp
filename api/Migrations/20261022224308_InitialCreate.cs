@@ -18,7 +18,7 @@ namespace AtmApp.Api.Migrations
                     Id = table.Column<Guid>(type: "TEXT", nullable: false),
                     Name = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
                     Balance = table.Column<long>(type: "INTEGER", nullable: false),
-                    ConcurrencyVersion = table.Column<Guid>(type: "TEXT", nullable: false)
+                    LastSequence = table.Column<long>(type: "INTEGER", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -32,6 +32,7 @@ namespace AtmApp.Api.Migrations
                 {
                     Id = table.Column<Guid>(type: "TEXT", nullable: false),
                     AccountId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    Sequence = table.Column<long>(type: "INTEGER", nullable: false),
                     Amount = table.Column<long>(type: "INTEGER", nullable: false),
                     BalanceAfter = table.Column<long>(type: "INTEGER", nullable: false),
                     Type = table.Column<string>(type: "TEXT", maxLength: 20, nullable: false),
@@ -53,10 +54,41 @@ namespace AtmApp.Api.Migrations
                 });
 
             migrationBuilder.CreateIndex(
-                name: "IX_Transactions_AccountId_TimestampUtc",
+                name: "IX_Transactions_AccountId_Sequence",
                 table: "Transactions",
-                columns: new[] { "AccountId", "TimestampUtc" },
-                descending: new[] { false, true });
+                columns: new[] { "AccountId", "Sequence" },
+                unique: true);
+
+            migrationBuilder.Sql(
+                """
+                CREATE TRIGGER "TR_Transactions_NoUpdate" BEFORE UPDATE ON "Transactions"
+                BEGIN
+                    SELECT RAISE(ABORT, 'Ledger is append-only: transactions cannot be updated.');
+                END;
+                """);
+
+            migrationBuilder.Sql(
+                """
+                CREATE TRIGGER "TR_Transactions_NoDelete" BEFORE DELETE ON "Transactions"
+                BEGIN
+                    SELECT RAISE(ABORT, 'Ledger is append-only: transactions cannot be deleted.');
+                END;
+                """);
+
+            // IS NOT rather than <> so an unknown Type (a NULL delta) also fails the check.
+            migrationBuilder.Sql(
+                """
+                CREATE TRIGGER "TR_Transactions_Chain" BEFORE INSERT ON "Transactions"
+                WHEN NEW."Sequence" IS NOT 1 + COALESCE(
+                        (SELECT MAX("Sequence") FROM "Transactions" WHERE "AccountId" = NEW."AccountId"), 0)
+                    OR NEW."BalanceAfter" IS NOT COALESCE(
+                        (SELECT "BalanceAfter" FROM "Transactions"
+                         WHERE "AccountId" = NEW."AccountId" AND "Sequence" = NEW."Sequence" - 1), 0)
+                        + CASE NEW."Type" WHEN 'Deposit' THEN NEW."Amount" WHEN 'Withdrawal' THEN -NEW."Amount" END
+                BEGIN
+                    SELECT RAISE(ABORT, 'Ledger chain broken: a transaction must take the next sequence and carry the previous balance forward by its amount.');
+                END;
+                """);
         }
 
         /// <inheritdoc />
