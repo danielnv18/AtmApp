@@ -14,7 +14,7 @@ export default defineConfig({
   ],
   server: {
     proxy: {
-      '/api': 'http://localhost:5000',
+      '/api': process.env.API_URL ?? 'http://localhost:5000',
     },
   },
   resolve: {

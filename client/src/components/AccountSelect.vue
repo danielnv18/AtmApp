@@ -10,7 +10,8 @@ const model = defineModel<string | undefined>()
 const id = useId()
 
 const describe = (a: Account) => `${a.name} (${formatMoney(a.balance)})`
-// SelectValue snapshots the item text when chosen, so render the trigger from live balances instead.
+// Reka's SelectValue keeps the item text from the moment it was chosen, so the
+// trigger is rendered from live balances instead.
 const triggerText = computed(() => {
   const selected = props.accounts.find((a) => a.id === model.value)
   return selected ? describe(selected) : (props.placeholder ?? 'Select account')

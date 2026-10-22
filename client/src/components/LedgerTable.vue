@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import type { Account, Transaction } from '@/types'
+import { computed } from 'vue'
+import type { Transaction } from '@/types'
+import { useAtm } from '@/composables/useAtm'
 import { formatMoney } from '@/lib/money'
 import AccountSelect from './AccountSelect.vue'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge, type BadgeVariants } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -13,31 +17,52 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-defineProps<{ accounts: readonly Account[]; transactions: readonly Transaction[] }>()
-const accountId = defineModel<string | undefined>('accountId')
+const { accounts, ledgerAccountId, history, historyError, showHistory } = useAtm()
 
-// A transfer is a Withdrawal/Deposit pair sharing a correlationId.
-function labelOf(t: Transaction) {
-  if (!t.correlationId) return t.type
-  return t.type === 'Deposit' ? 'Transfer In' : 'Transfer Out'
+type Kind = 'Deposit' | 'Withdrawal' | 'TransferIn' | 'TransferOut'
+
+const TYPE_META: Record<Kind, { label: string; credit: boolean; badge: BadgeVariants['variant'] }> = {
+  Deposit: { label: 'Deposit', credit: true, badge: 'secondary' },
+  Withdrawal: { label: 'Withdrawal', credit: false, badge: 'outline' },
+  TransferIn: { label: 'Transfer In', credit: true, badge: 'secondary' },
+  TransferOut: { label: 'Transfer Out', credit: false, badge: 'outline' },
 }
 
-const timestamp = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium' })
+// A transfer is a Withdrawal/Deposit pair sharing a correlationId.
+function kindOf(t: Transaction): Kind {
+  if (t.correlationId === null) return t.type
+  return t.type === 'Deposit' ? 'TransferIn' : 'TransferOut'
+}
+
+const rows = computed(() => history.value.map((t) => ({ ...t, meta: TYPE_META[kindOf(t)] })))
+
+const selected = computed({
+  get: () => ledgerAccountId.value ?? undefined,
+  set: (id) => {
+    if (id !== undefined) void showHistory(id)
+  },
+})
+
+const timestamp = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
 </script>
 
 <template>
-  <Card>
+  <Card data-testid="ledger">
     <CardHeader class="flex flex-wrap items-end justify-between gap-4">
       <CardTitle>Ledger</CardTitle>
       <div class="w-full sm:w-64">
-        <AccountSelect v-model="accountId" label="Account" :accounts="accounts" />
+        <AccountSelect v-model="selected" label="Ledger account" :accounts="accounts" />
       </div>
     </CardHeader>
-    <CardContent>
+    <CardContent class="grid gap-4">
+      <Alert v-if="historyError" variant="destructive">
+        <AlertTitle>Could not load history</AlertTitle>
+        <AlertDescription>{{ historyError }}</AlertDescription>
+      </Alert>
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Timestamp</TableHead>
+            <TableHead>Time</TableHead>
             <TableHead>Type</TableHead>
             <TableHead>Description</TableHead>
             <TableHead class="text-right">Amount</TableHead>
@@ -45,14 +70,24 @@ const timestamp = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeSt
           </TableRow>
         </TableHeader>
         <TableBody>
-          <TableRow v-for="t in transactions" :key="t.id">
+          <TableRow v-for="t in rows" :key="t.id" data-testid="ledger-row">
             <TableCell>{{ timestamp.format(new Date(t.timestampUtc)) }}</TableCell>
-            <TableCell>{{ labelOf(t) }}</TableCell>
+            <TableCell>
+              <Badge :variant="t.meta.badge">{{ t.meta.label }}</Badge>
+            </TableCell>
             <TableCell>{{ t.description }}</TableCell>
-            <TableCell class="text-right tabular-nums">{{ formatMoney(t.amount) }}</TableCell>
-            <TableCell class="text-right tabular-nums">{{ formatMoney(t.balanceAfter) }}</TableCell>
+            <TableCell
+              class="text-right tabular-nums"
+              :class="t.meta.credit ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'"
+              data-testid="ledger-amount"
+            >
+              {{ t.meta.credit ? '+' : '−' }}{{ formatMoney(t.amount) }}
+            </TableCell>
+            <TableCell class="text-right tabular-nums" data-testid="ledger-balance">
+              {{ formatMoney(t.balanceAfter) }}
+            </TableCell>
           </TableRow>
-          <TableEmpty v-if="transactions.length === 0" :colspan="5">No transactions yet.</TableEmpty>
+          <TableEmpty v-if="rows.length === 0" :colspan="5">No transactions yet.</TableEmpty>
         </TableBody>
       </Table>
     </CardContent>

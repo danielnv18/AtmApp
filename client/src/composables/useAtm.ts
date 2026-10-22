@@ -1,51 +1,94 @@
-import { ref } from 'vue'
+import { readonly, ref } from 'vue'
 import { atmClient } from '@/api/atmClient'
-import type { Account, OperationRequest, Transaction } from '@/types'
+import type { Account, Operation, Transaction } from '@/types'
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
-export function useAtm() {
-  const accounts = ref<Account[]>([])
-  const error = ref<string | null>(null)
-  const ledgerAccountId = ref<string>()
-  const transactions = ref<Transaction[]>([])
+const accounts = ref<Account[]>([])
+const accountsError = ref<string | null>(null)
+const ledgerAccountId = ref<string | null>(null)
+const history = ref<Transaction[]>([])
+const historyError = ref<string | null>(null)
+const pending = ref<Operation | null>(null)
 
-  async function loadHistory() {
-    const id = ledgerAccountId.value
-    if (id === undefined) return
+// Only the latest history load may write, so a slow response or error for an
+// account the user has since left is dropped.
+let historyTicket = 0
+
+async function loadHistory() {
+  const id = ledgerAccountId.value
+  if (id === null) return
+  const ticket = ++historyTicket
+  try {
     const page = await atmClient.getHistory(id)
-    // Ignore a slow response for an account that is no longer selected.
-    if (ledgerAccountId.value === id) transactions.value = page.items
+    if (ticket !== historyTicket) return
+    history.value = page.items
+    historyError.value = null
+  } catch (e) {
+    if (ticket !== historyTicket) return
+    historyError.value = messageOf(e)
   }
+}
 
-  async function refresh() {
-    try {
-      accounts.value = await atmClient.getAccounts()
-      ledgerAccountId.value ??= accounts.value[0]?.id
-      await loadHistory()
-      error.value = null
-    } catch (e) {
-      error.value = messageOf(e)
-    }
+async function refresh() {
+  try {
+    accounts.value = await atmClient.getAccounts()
+    accountsError.value = null
+  } catch (e) {
+    accountsError.value = messageOf(e)
+    return
   }
+  ledgerAccountId.value ??= accounts.value[0]?.id ?? null
+  await loadHistory()
+}
 
-  async function selectLedgerAccount(id: string | undefined) {
-    ledgerAccountId.value = id
-    transactions.value = []
-    try {
-      await loadHistory()
-    } catch (e) {
-      error.value = messageOf(e)
-    }
+async function showHistory(accountId: string) {
+  ledgerAccountId.value = accountId
+  history.value = []
+  historyError.value = null
+  await loadHistory()
+}
+
+function applyBalances(rows: Transaction[]) {
+  const balanceAfter = new Map(rows.map((r) => [r.accountId, r.balanceAfter]))
+  accounts.value = accounts.value.map((a) => {
+    const balance = balanceAfter.get(a.id)
+    return balance === undefined ? a : { ...a, balance }
+  })
+}
+
+async function run(operation: Operation, call: () => Promise<Transaction[]>) {
+  pending.value = operation
+  try {
+    applyBalances(await call())
+    await loadHistory()
+  } finally {
+    pending.value = null
   }
+}
 
-  // Errors propagate so the form that submitted the operation can show them.
-  async function execute({ op, accountId, toAccountId, amount }: OperationRequest) {
-    if (op === 'deposit') await atmClient.deposit(accountId, amount)
-    else if (op === 'withdraw') await atmClient.withdraw(accountId, amount)
-    else if (toAccountId !== undefined) await atmClient.transfer(accountId, toAccountId, amount)
-    await refresh()
+const deposit = (accountId: string, amount: number) =>
+  run('deposit', async () => [await atmClient.deposit(accountId, amount)])
+const withdraw = (accountId: string, amount: number) =>
+  run('withdraw', async () => [await atmClient.withdraw(accountId, amount)])
+const transfer = (fromAccountId: string, toAccountId: string, amount: number) =>
+  run('transfer', async () => {
+    const receipt = await atmClient.transfer(fromAccountId, toAccountId, amount)
+    return [receipt.withdrawal, receipt.deposit]
+  })
+
+export function useAtm() {
+  return {
+    accounts: readonly(accounts),
+    accountsError: readonly(accountsError),
+    ledgerAccountId: readonly(ledgerAccountId),
+    history: readonly(history),
+    historyError: readonly(historyError),
+    pending: readonly(pending),
+    refresh,
+    showHistory,
+    deposit,
+    withdraw,
+    transfer,
   }
-
-  return { accounts, error, ledgerAccountId, transactions, refresh, selectLedgerAccount, execute }
 }
