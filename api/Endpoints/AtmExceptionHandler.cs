@@ -24,9 +24,10 @@ public sealed class AtmExceptionHandler(IProblemDetailsService problemDetails, I
             DbUpdateConcurrencyException =>
                 (StatusCodes.Status409Conflict, "Concurrent update",
                     "The account was changed by another request. Reload and try again."),
-            // Malformed JSON or a missing body: keep the framework's 400 instead of reporting a server error.
+            // Malformed JSON, a missing body or field, or an unparsable query value: keep the
+            // framework's 400 instead of reporting a server error.
             BadHttpRequestException bad =>
-                (bad.StatusCode, "Bad request", "The request body is missing or malformed."),
+                (bad.StatusCode, "Bad request", "The request is malformed or is missing a required value."),
             _ => (StatusCodes.Status500InternalServerError, "Unexpected error", "An unexpected error occurred."),
         };
 

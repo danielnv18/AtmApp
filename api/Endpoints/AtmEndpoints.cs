@@ -24,19 +24,19 @@ public static class AtmEndpoints
         {
             if (limit is < MinHistoryLimit or > MaxHistoryLimit)
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["limit"] = [$"limit must be between {MinHistoryLimit} and {MaxHistoryLimit}."],
-                });
+                return Results.Problem(
+                    title: "Invalid limit",
+                    detail: $"limit must be between {MinHistoryLimit} and {MaxHistoryLimit}.",
+                    statusCode: StatusCodes.Status400BadRequest);
             }
 
             HistoryCursor? after = null;
             if (cursor is not null && !CursorToken.TryDecode(cursor, out after))
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["cursor"] = ["cursor is invalid. Use the nextCursor value from a previous response."],
-                });
+                return Results.Problem(
+                    title: "Invalid cursor",
+                    detail: "cursor is invalid. Use the nextCursor value from a previous response.",
+                    statusCode: StatusCodes.Status400BadRequest);
             }
 
             var page = await service.GetHistoryAsync(id, limit, after, ct);
@@ -83,7 +83,7 @@ public sealed record AccountResponse(Guid Id, string Name, decimal Balance)
 public sealed record TransactionResponse(
     Guid Id,
     Guid AccountId,
-    string Type,
+    TransactionType Type,
     decimal Amount,
     decimal BalanceAfter,
     Guid? CorrelationId,
@@ -91,7 +91,7 @@ public sealed record TransactionResponse(
     string? Description)
 {
     public static TransactionResponse From(Transaction t) =>
-        new(t.Id, t.AccountId, t.Type.ToString(), t.Amount, t.BalanceAfter, t.CorrelationId, t.TimestampUtc, t.Description);
+        new(t.Id, t.AccountId, t.Type, t.Amount, t.BalanceAfter, t.CorrelationId, t.TimestampUtc, t.Description);
 }
 
 public sealed record HistoryResponse(IReadOnlyList<TransactionResponse> Items, string? NextCursor);

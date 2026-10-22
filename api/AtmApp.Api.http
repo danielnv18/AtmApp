@@ -1,6 +1,40 @@
-@AtmApp.Api_HostAddress = http://localhost:5000
+@host = http://localhost:5000
+# Copy an id from the accounts response.
+@accountId = 00000000-0000-0000-0000-000000000000
+@toAccountId = 00000000-0000-0000-0000-000000000000
 
-GET {{AtmApp.Api_HostAddress}}/api/weatherforecast/
+### List accounts
+GET {{host}}/api/atm/accounts
 Accept: application/json
 
-###
+### Account history, newest first. Pass nextCursor from a previous page as &cursor=
+GET {{host}}/api/atm/accounts/{{accountId}}/history?limit=50
+Accept: application/json
+
+### Deposit
+POST {{host}}/api/atm/deposit
+Content-Type: application/json
+
+{
+  "accountId": "{{accountId}}",
+  "amount": 25.50
+}
+
+### Withdraw
+POST {{host}}/api/atm/withdraw
+Content-Type: application/json
+
+{
+  "accountId": "{{accountId}}",
+  "amount": 20
+}
+
+### Transfer
+POST {{host}}/api/atm/transfer
+Content-Type: application/json
+
+{
+  "fromAccountId": "{{accountId}}",
+  "toAccountId": "{{toAccountId}}",
+  "amount": 100
+}
