@@ -132,14 +132,48 @@ public sealed class AccountServiceTests : IAsyncLifetime
             await service.DepositAsync(_checking, Money.Parse(1m));
         }
 
-        var all = await service.GetHistoryAsync(_checking, 10);
-        var firstTwo = await service.GetHistoryAsync(_checking, 2);
-        var savingsHistory = await service.GetHistoryAsync(_savings, 10);
+        var all = (await service.GetHistoryAsync(_checking, 10)).Items;
+        var firstTwo = (await service.GetHistoryAsync(_checking, 2)).Items;
+        var savingsHistory = (await service.GetHistoryAsync(_savings, 10)).Items;
 
         Assert.Equal(4, all.Count);
         Assert.Equal(DatabaseInitializer.OpeningDescription, all[^1].Description);
         Assert.Equal(all.Take(2).Select(t => t.Id), firstTwo.Select(t => t.Id));
         Assert.All(savingsHistory, t => Assert.Equal(_savings, t.AccountId));
+    }
+
+    [Fact]
+    public async Task Paging_returns_every_row_exactly_once_even_when_new_rows_arrive_between_pages()
+    {
+        await using var db = _database.NewContext();
+        var service = NewService(db);
+        // Five rows share one timestamp, so page boundaries fall inside a tie and rely on the Id tie-break.
+        for (var i = 0; i < 5; i++)
+        {
+            await service.DepositAsync(_checking, Money.Parse(1m));
+        }
+
+        var expected = (await service.GetHistoryAsync(_checking, 200)).Items.Select(t => t.Id).ToList();
+        var seen = new List<Guid>();
+        HistoryCursor? cursor = null;
+        var pages = 0;
+        do
+        {
+            var page = await service.GetHistoryAsync(_checking, 2, cursor);
+            seen.AddRange(page.Items.Select(t => t.Id));
+            cursor = page.Next;
+            pages++;
+
+            if (pages == 1)
+            {
+                await new AccountService(db, new FixedClock(Now.AddMinutes(1))).DepositAsync(_checking, Money.Parse(1m));
+            }
+        }
+        while (cursor is not null);
+
+        Assert.Equal(6, expected.Count);
+        Assert.Equal(expected, seen);
+        Assert.Equal(3, pages);
     }
 
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider

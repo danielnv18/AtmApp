@@ -1,4 +1,5 @@
 using AtmApp.Api.Application;
+using AtmApp.Api.Endpoints;
 using AtmApp.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -9,7 +10,11 @@ builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddDbContext<AtmDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("Atm")));
 
-// Add services to the container.
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new MoneyJsonConverter()));
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<AtmExceptionHandler>();
+
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
@@ -21,6 +26,8 @@ using (var scope = app.Services.CreateScope())
         scope.ServiceProvider.GetRequiredService<AtmDbContext>(),
         scope.ServiceProvider.GetRequiredService<TimeProvider>());
 }
+
+app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -34,28 +41,8 @@ else
     app.UseHttpsRedirection();
 }
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/api/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+app.MapAtmEndpoints();
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
+public partial class Program;

@@ -9,21 +9,35 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
     public async Task<IReadOnlyList<Account>> GetAccountsAsync(CancellationToken ct = default) =>
         await db.Accounts.AsNoTracking().OrderBy(a => a.Name).ToListAsync(ct);
 
-    public async Task<IReadOnlyList<Transaction>> GetHistoryAsync(Guid accountId, int limit, CancellationToken ct = default)
+    public async Task<HistoryPage> GetHistoryAsync(
+        Guid accountId, int limit, HistoryCursor? after = null, CancellationToken ct = default)
     {
         if (!await db.Accounts.AnyAsync(a => a.Id == accountId, ct))
         {
             throw new DomainException(DomainError.AccountNotFound);
         }
 
-        return await db.Transactions
-            .AsNoTracking()
-            .Where(t => t.AccountId == accountId)
+        var query = db.Transactions.AsNoTracking().Where(t => t.AccountId == accountId);
+
+        // Keyset paging: continue strictly after the cursor row in sort order. Unlike an offset,
+        // rows inserted at the top between requests can't shift items into the next page.
+        if (after is not null)
+        {
+            query = query.Where(t => t.TimestampUtc < after.TimestampUtc
+                || (t.TimestampUtc == after.TimestampUtc && t.Id.CompareTo(after.Id) < 0));
+        }
+
+        var rows = await query
             .OrderByDescending(t => t.TimestampUtc)
             // Both sides of a transfer share a timestamp; the Id tie-break keeps paging stable.
             .ThenByDescending(t => t.Id)
-            .Take(limit)
+            // One extra row tells us whether another page exists without a COUNT query.
+            .Take(limit + 1)
             .ToListAsync(ct);
+
+        var items = rows.Take(limit).ToList();
+        var next = rows.Count > limit ? HistoryCursor.After(items[^1]) : null;
+        return new HistoryPage(items, next);
     }
 
     public async Task<Transaction> DepositAsync(Guid accountId, Money amount, CancellationToken ct = default)
