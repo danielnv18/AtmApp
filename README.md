@@ -24,3 +24,11 @@ npm run dev
 ```
 
 Run each in its own terminal.
+
+## Reset the database
+
+Stop the API, then delete this file in `api/`:
+
+- `atm.db`
+
+The next `dotnet run` recreates it and seeds the opening accounts.

@@ -12,3 +12,8 @@ dist/
 .DS_Store
 Thumbs.db
 .idea/
+
+# SQLite database (local dev data, never commit)
+*.db
+*.db-shm
+*.db-wal
