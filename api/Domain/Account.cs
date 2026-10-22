@@ -20,7 +20,7 @@ public sealed class Account
     public Transaction Credit(Money amount, DateTimeOffset timestampUtc, Guid? correlationId = null, string? description = null)
     {
         Balance += amount.Value;
-        return Apply(amount, TransactionType.Credit, timestampUtc, correlationId, description);
+        return Apply(amount, TransactionType.Deposit, timestampUtc, correlationId, description);
     }
 
     public Transaction Debit(Money amount, DateTimeOffset timestampUtc, Guid? correlationId = null, string? description = null)
@@ -31,7 +31,7 @@ public sealed class Account
         }
 
         Balance -= amount.Value;
-        return Apply(amount, TransactionType.Debit, timestampUtc, correlationId, description);
+        return Apply(amount, TransactionType.Withdrawal, timestampUtc, correlationId, description);
     }
 
     private Transaction Apply(Money amount, TransactionType type, DateTimeOffset timestampUtc, Guid? correlationId, string? description)

@@ -31,7 +31,7 @@ public class AccountTests
         Assert.NotEqual(versionBefore, account.ConcurrencyVersion);
         Assert.Equal(69.75m, tx.BalanceAfter);
         Assert.Equal(30.25m, tx.Amount);
-        Assert.Equal(TransactionType.Debit, tx.Type);
+        Assert.Equal(TransactionType.Withdrawal, tx.Type);
     }
 
     [Fact]
