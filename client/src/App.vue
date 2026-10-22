@@ -1,25 +1,13 @@
 <script setup lang="ts">
-import type { Account, Transaction } from '@/types'
+import { onMounted } from 'vue'
+import { useAtm } from '@/composables/useAtm'
 import AccountCards from '@/components/AccountCards.vue'
 import ActionPanel from '@/components/ActionPanel.vue'
 import LedgerTable from '@/components/LedgerTable.vue'
 
-const accounts: Account[] = [
-  { id: 'checking', name: 'Checking', balance: 1000 },
-  { id: 'savings', name: 'Savings', balance: 500 },
-]
+const { accounts, error, ledgerAccountId, transactions, refresh, selectLedgerAccount, execute } = useAtm()
 
-const transactions: Transaction[] = [
-  {
-    id: '1',
-    type: 'Deposit',
-    amount: 1000,
-    balanceAfter: 1000,
-    correlationId: null,
-    timestampUtc: '2026-10-22T16:00:00Z',
-    description: 'Opening deposit',
-  },
-]
+onMounted(refresh)
 </script>
 
 <template>
@@ -29,9 +17,18 @@ const transactions: Transaction[] = [
         <h1 class="text-2xl font-semibold tracking-tight">ATM</h1>
       </header>
 
-      <AccountCards :accounts="accounts" />
-      <ActionPanel :accounts="accounts" />
-      <LedgerTable :accounts="accounts" :transactions="transactions" />
+      <p v-if="error" class="text-destructive text-sm">{{ error }}</p>
+
+      <template v-if="accounts.length > 0">
+        <AccountCards :accounts="accounts" />
+        <ActionPanel :accounts="accounts" :submit="execute" />
+        <LedgerTable
+          :accounts="accounts"
+          :transactions="transactions"
+          :account-id="ledgerAccountId"
+          @update:account-id="selectLedgerAccount"
+        />
+      </template>
     </main>
   </div>
 </template>

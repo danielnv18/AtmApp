@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { ref } from 'vue'
 import type { Account, Transaction } from '@/types'
 import { formatMoney } from '@/lib/money'
 import AccountSelect from './AccountSelect.vue'
@@ -14,9 +13,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const props = defineProps<{ accounts: readonly Account[]; transactions: readonly Transaction[] }>()
-
-const accountId = ref(props.accounts[0]?.id)
+defineProps<{ accounts: readonly Account[]; transactions: readonly Transaction[] }>()
+const accountId = defineModel<string | undefined>('accountId')
 
 // A transfer is a Withdrawal/Deposit pair sharing a correlationId.
 function labelOf(t: Transaction) {
