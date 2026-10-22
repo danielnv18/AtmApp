@@ -22,7 +22,7 @@ public sealed class PersistenceTests : IAsyncLifetime
     public Task DisposeAsync()
     {
         SqliteConnection.ClearAllPools();
-        foreach (var suffix in new[] { "", "-wal", "-shm" })
+        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
         {
             File.Delete(_path + suffix);
         }
@@ -31,16 +31,11 @@ public sealed class PersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Seeding_creates_opening_ledger_rows_and_is_not_repeated_on_restart()
+    public async Task First_start_seeds_two_accounts_each_with_an_opening_deposit()
     {
-        await using (var db = NewContext())
-        {
-            await DatabaseInitializer.InitializeAsync(db, TimeProvider.System);
-        }
-
-        await using var verify = NewContext();
-        var accounts = await verify.Accounts.OrderBy(a => a.Name).ToListAsync();
-        var ledger = await verify.Transactions.ToListAsync();
+        await using var db = NewContext();
+        var accounts = await db.Accounts.OrderBy(a => a.Name).ToListAsync();
+        var ledger = await db.Transactions.ToListAsync();
 
         Assert.Equal(["Checking", "Savings"], accounts.Select(a => a.Name));
         Assert.Equal([1000.00m, 500.00m], accounts.Select(a => a.Balance));
@@ -48,16 +43,29 @@ public sealed class PersistenceTests : IAsyncLifetime
         Assert.All(ledger, t =>
         {
             Assert.Equal(TransactionType.Deposit, t.Type);
-            Assert.Equal(DatabaseInitializer.OpeningDescription, t.Description);
-            Assert.Equal(accounts.Single(a => a.Id == t.AccountId).Balance, t.BalanceAfter);
+            Assert.Equal("Opening deposit", t.Description);
+            Assert.Equal(accounts.Single(a => a.Id == t.AccountId).Balance, t.Amount);
         });
+    }
+
+    [Fact]
+    public async Task Restarting_the_app_does_not_seed_again()
+    {
+        await using (var db = NewContext())
+        {
+            await DatabaseInitializer.InitializeAsync(db, TimeProvider.System);
+        }
+
+        await using var verify = NewContext();
+        Assert.Equal(2, await verify.Accounts.CountAsync());
+        Assert.Equal(2, await verify.Transactions.CountAsync());
     }
 
     [Theory]
     [InlineData("UPDATE \"Accounts\" SET \"Balance\" = -1")]
     [InlineData("UPDATE \"Transactions\" SET \"Amount\" = 0")]
     [InlineData("UPDATE \"Transactions\" SET \"BalanceAfter\" = -1")]
-    public async Task Engine_rejects_writes_that_bypass_the_domain(string sql)
+    public async Task Database_rejects_invalid_money_even_when_the_domain_is_bypassed(string sql)
     {
         await using var db = NewContext();
 
@@ -67,12 +75,12 @@ public sealed class PersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Stale_account_write_is_rejected_instead_of_overwriting()
+    public async Task Concurrent_debits_cannot_both_succeed_and_the_loser_writes_nothing()
     {
         await using var first = NewContext();
         await using var second = NewContext();
-        var a = await first.Accounts.FirstAsync(x => x.Name == "Checking");
-        var b = await second.Accounts.FirstAsync(x => x.Name == "Checking");
+        var a = await first.Accounts.SingleAsync(x => x.Name == "Checking");
+        var b = await second.Accounts.SingleAsync(x => x.Name == "Checking");
 
         first.Transactions.Add(a.Debit(Money.Parse(100m), DateTimeOffset.UtcNow));
         await first.SaveChangesAsync();
@@ -81,27 +89,56 @@ public sealed class PersistenceTests : IAsyncLifetime
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => second.SaveChangesAsync());
 
         await using var verify = NewContext();
-        Assert.Equal(900m, (await verify.Accounts.SingleAsync(x => x.Name == "Checking")).Balance);
+        var checking = await verify.Accounts.SingleAsync(x => x.Name == "Checking");
+        var withdrawals = await verify.Transactions
+            .CountAsync(t => t.AccountId == checking.Id && t.Type == TransactionType.Withdrawal);
+        Assert.Equal(900m, checking.Balance);
+        Assert.Equal(1, withdrawals);
     }
 
     [Fact]
-    public async Task Newest_transaction_sorts_first_in_sql_and_cents_round_trip_exactly()
+    public async Task Saved_ledger_reconciles_with_the_balance_and_amounts_survive_exactly()
     {
-        await using var db = NewContext();
-        var account = await db.Accounts.FirstAsync(x => x.Name == "Savings");
-        var later = DateTimeOffset.UtcNow.AddMinutes(1);
-        db.Transactions.Add(account.Credit(Money.Parse(0.33m), later));
-        await db.SaveChangesAsync();
+        var at = DateTimeOffset.UtcNow;
+        await using (var db = NewContext())
+        {
+            var savings = await db.Accounts.SingleAsync(x => x.Name == "Savings");
+            db.Transactions.Add(savings.Credit(Money.Parse(0.01m), at.AddMinutes(1)));
+            db.Transactions.Add(savings.Credit(Money.Parse(999_999_499.99m), at.AddMinutes(2)));
+            db.Transactions.Add(savings.Debit(Money.Parse(0.33m), at.AddMinutes(3)));
+            await db.SaveChangesAsync();
+        }
 
         await using var verify = NewContext();
-        var newest = await verify.Transactions
-            .Where(t => t.AccountId == account.Id)
-            .OrderByDescending(t => t.TimestampUtc)
-            .FirstAsync();
+        var account = await verify.Accounts.SingleAsync(x => x.Name == "Savings");
+        var ledger = await verify.Transactions.Where(t => t.AccountId == account.Id).ToListAsync();
 
-        Assert.Equal(0.33m, newest.Amount);
-        Assert.Equal(500.33m, newest.BalanceAfter);
-        Assert.Equal(later.UtcTicks, newest.TimestampUtc.UtcTicks);
+        var net = ledger.Sum(t => t.Type == TransactionType.Deposit ? t.Amount : -t.Amount);
+        var latest = ledger.OrderByDescending(t => t.TimestampUtc).First();
+        Assert.Equal(999_999_999.67m, account.Balance);
+        Assert.Equal(account.Balance, net);
+        Assert.Equal(account.Balance, latest.BalanceAfter);
+    }
+
+    [Fact]
+    public async Task Sql_orders_transactions_newest_first_by_utc_instant()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        await using (var db = NewContext())
+        {
+            var checking = await db.Accounts.SingleAsync(x => x.Name == "Checking");
+            db.Transactions.Add(checking.Credit(Money.Parse(2m), at.AddYears(5), description: "middle"));
+            db.Transactions.Add(checking.Credit(Money.Parse(1m), at.AddYears(10), description: "newest"));
+            await db.SaveChangesAsync();
+        }
+
+        await using var verify = NewContext();
+        var descriptions = await verify.Transactions
+            .OrderByDescending(t => t.TimestampUtc)
+            .Select(t => t.Description)
+            .Take(2)
+            .ToListAsync();
+
+        Assert.Equal(["newest", "middle"], descriptions);
     }
 }
-
