@@ -4,6 +4,7 @@ public sealed class Transaction
 {
     public Guid Id { get; private init; }
     public Guid AccountId { get; private init; }
+    public long Sequence { get; private init; }
     public decimal Amount { get; private init; }
     public decimal BalanceAfter { get; private init; }
     public TransactionType Type { get; private init; }
@@ -16,6 +17,7 @@ public sealed class Transaction
 
     internal static Transaction Create(
         Guid accountId,
+        long sequence,
         Money amount,
         decimal balanceAfter,
         TransactionType type,
@@ -25,6 +27,7 @@ public sealed class Transaction
     {
         Id = Guid.NewGuid(),
         AccountId = accountId,
+        Sequence = sequence,
         Amount = amount.Value,
         BalanceAfter = balanceAfter,
         Type = type,

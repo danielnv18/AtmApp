@@ -165,6 +165,8 @@ public sealed class AtmApiTests : IAsyncLifetime
     [Theory]
     [InlineData("not-a-cursor")]
     [InlineData("MTIzOmFiYw")]
+    [InlineData("MA")]
+    [InlineData("LTE")]
     public async Task Tampered_cursor_is_a_validation_error(string cursor)
     {
         var response = await _client.GetAsync($"/api/atm/accounts/{_checking}/history?cursor={cursor}");

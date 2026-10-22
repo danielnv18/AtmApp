@@ -1,7 +1,10 @@
+using AtmApp.Api.Application;
 using AtmApp.Api.Domain;
 using AtmApp.Api.Infrastructure;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace AtmApp.Api.Tests.Infrastructure;
 
@@ -28,6 +31,7 @@ public sealed class PersistenceTests : IAsyncLifetime
         Assert.All(ledger, t =>
         {
             Assert.Equal(TransactionType.Deposit, t.Type);
+            Assert.Equal(1, t.Sequence);
             Assert.Equal("Opening deposit", t.Description);
             Assert.Equal(accounts.Single(a => a.Id == t.AccountId).Balance, t.Amount);
         });
@@ -46,17 +50,123 @@ public sealed class PersistenceTests : IAsyncLifetime
         Assert.Equal(2, await verify.Transactions.CountAsync());
     }
 
+    [Fact]
+    public async Task Database_rejects_a_negative_balance_even_when_the_domain_is_bypassed()
+    {
+        await using var db = NewContext();
+
+        var ex = await Assert.ThrowsAsync<SqliteException>(
+            () => db.Database.ExecuteSqlRawAsync("UPDATE \"Accounts\" SET \"Balance\" = -1"));
+
+        Assert.Contains("CHECK constraint failed", ex.Message);
+    }
+
     [Theory]
-    [InlineData("UPDATE \"Accounts\" SET \"Balance\" = -1")]
+    [InlineData("UPDATE \"Transactions\" SET \"Description\" = 'edited'")]
     [InlineData("UPDATE \"Transactions\" SET \"Amount\" = 0")]
-    [InlineData("UPDATE \"Transactions\" SET \"BalanceAfter\" = -1")]
-    public async Task Database_rejects_invalid_money_even_when_the_domain_is_bypassed(string sql)
+    [InlineData("DELETE FROM \"Transactions\"")]
+    public async Task Database_rejects_any_change_to_an_existing_ledger_row(string sql)
     {
         await using var db = NewContext();
 
         var ex = await Assert.ThrowsAsync<SqliteException>(() => db.Database.ExecuteSqlRawAsync(sql));
 
-        Assert.Contains("CHECK constraint failed", ex.Message);
+        Assert.Contains("Ledger is append-only", ex.Message);
+        Assert.Equal(2, await db.Transactions.CountAsync(t => t.Description == DatabaseInitializer.OpeningDescription));
+    }
+
+    // Checking is seeded with one row: sequence 1, balance after 1000.00 (100000 cents).
+    [Theory]
+    [InlineData(3, 100, 100100, "Deposit", "Ledger chain broken")]
+    [InlineData(1, 100, 100100, "Deposit", "Ledger chain broken")]
+    [InlineData(2, 100, 100200, "Deposit", "Ledger chain broken")]
+    [InlineData(2, 100, 100100, "Withdrawal", "Ledger chain broken")]
+    [InlineData(2, 100, 100100, "Bonus", "Ledger chain broken")]
+    [InlineData(2, 0, 100000, "Deposit", "CHECK constraint failed")]
+    [InlineData(2, 100001, -1, "Withdrawal", "CHECK constraint failed")]
+    public async Task Database_rejects_a_ledger_row_that_does_not_extend_the_chain(
+        long sequence, long amountCents, long balanceAfterCents, string type, string error)
+    {
+        var ex = await Assert.ThrowsAsync<SqliteException>(
+            () => InsertCheckingRowAsync(sequence, amountCents, balanceAfterCents, type));
+
+        Assert.Contains(error, ex.Message);
+    }
+
+    [Fact]
+    public async Task Database_accepts_a_raw_ledger_row_that_extends_the_chain()
+    {
+        await InsertCheckingRowAsync(2, 2500, 97500, "Withdrawal");
+
+        await using var verify = NewContext();
+        Assert.Equal(1, await verify.Transactions.CountAsync(t => t.Sequence == 2 && t.BalanceAfter == 975m));
+    }
+
+    private async Task InsertCheckingRowAsync(long sequence, long amountCents, long balanceAfterCents, string type)
+    {
+        await using var db = NewContext();
+        var checking = await db.Accounts.SingleAsync(a => a.Name == "Checking");
+        // EF stores Guids as uppercase TEXT in SQLite; the FK compares the text exactly.
+        var id = Guid.NewGuid().ToString().ToUpperInvariant();
+        var accountId = checking.Id.ToString().ToUpperInvariant();
+        await db.Database.ExecuteSqlAsync($"""
+            INSERT INTO "Transactions" ("Id", "AccountId", "Sequence", "Amount", "BalanceAfter", "Type", "TimestampUtc")
+            VALUES ({id}, {accountId}, {sequence}, {amountCents}, {balanceAfterCents}, {type}, 0)
+            """);
+    }
+
+    [Fact]
+    public async Task Migrating_an_existing_database_numbers_each_ledger_and_installs_the_guards()
+    {
+        var legacy = new TestDatabase();
+        try
+        {
+            var (a, b) = ("A0000000-0000-0000-0000-000000000000", "B0000000-0000-0000-0000-000000000000");
+            await using (var db = legacy.NewContext())
+            {
+                await db.GetService<IMigrator>().MigrateAsync("20261022215308_InitialCreate");
+                await db.Database.ExecuteSqlRawAsync(
+                    """
+                    INSERT INTO "Accounts" ("Id", "Name", "Balance", "ConcurrencyVersion") VALUES
+                        ('A0000000-0000-0000-0000-000000000000', 'A', 7500, 'C0000000-0000-0000-0000-000000000000'),
+                        ('B0000000-0000-0000-0000-000000000000', 'B', 5000, 'C0000000-0000-0000-0000-000000000000');
+                    INSERT INTO "Transactions" ("Id", "AccountId", "Amount", "BalanceAfter", "Type", "TimestampUtc", "Description") VALUES
+                        ('00000000-0000-0000-0000-000000000001', 'A0000000-0000-0000-0000-000000000000', 3000, 7000, 'Withdrawal', 20, 'a2'),
+                        ('00000000-0000-0000-0000-000000000002', 'A0000000-0000-0000-0000-000000000000', 10000, 10000, 'Deposit', 10, 'a1'),
+                        ('00000000-0000-0000-0000-000000000003', 'B0000000-0000-0000-0000-000000000000', 5000, 5000, 'Deposit', 20, 'b1'),
+                        ('00000000-0000-0000-0000-000000000004', 'A0000000-0000-0000-0000-000000000000', 500, 7500, 'Deposit', 20, 'a3');
+                    """);
+            }
+
+            await using (var db = legacy.NewContext())
+            {
+                await db.Database.MigrateAsync();
+            }
+
+            await using var verify = legacy.NewContext();
+            var ledger = await verify.Transactions
+                .OrderBy(t => t.AccountId).ThenBy(t => t.Sequence)
+                .Select(t => new { t.Description, t.Sequence })
+                .ToListAsync();
+            var lastSequences = await verify.Accounts.OrderBy(x => x.Name).Select(x => x.LastSequence).ToListAsync();
+            var triggers = await verify.Database
+                .SqlQueryRaw<string>("SELECT name AS \"Value\" FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
+                .ToListAsync();
+
+            Assert.Equal(
+                [("a1", 1L), ("a2", 2L), ("a3", 3L), ("b1", 1L)],
+                ledger.Select(t => (t.Description!, t.Sequence)));
+            Assert.Equal([3L, 1L], lastSequences);
+            Assert.Equal(["TR_Transactions_Chain", "TR_Transactions_NoDelete", "TR_Transactions_NoUpdate"], triggers);
+
+            var next = await new AccountService(verify, TimeProvider.System).WithdrawAsync(Guid.Parse(a), Money.Parse(75m));
+            Assert.Equal((4L, 0m), (next.Sequence, next.BalanceAfter));
+            Assert.Equal("b1", (await verify.Transactions.SingleAsync(t => t.AccountId == Guid.Parse(b))).Description);
+        }
+        finally
+        {
+            await legacy.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -89,7 +199,9 @@ public sealed class PersistenceTests : IAsyncLifetime
         {
             var savings = await db.Accounts.SingleAsync(x => x.Name == "Savings");
             db.Transactions.Add(savings.Credit(Money.Parse(0.01m), at.AddMinutes(1)));
+            await db.SaveChangesAsync();
             db.Transactions.Add(savings.Credit(Money.Parse(999_999_499.99m), at.AddMinutes(2)));
+            await db.SaveChangesAsync();
             db.Transactions.Add(savings.Debit(Money.Parse(0.33m), at.AddMinutes(3)));
             await db.SaveChangesAsync();
         }
@@ -113,6 +225,7 @@ public sealed class PersistenceTests : IAsyncLifetime
         {
             var checking = await db.Accounts.SingleAsync(x => x.Name == "Checking");
             db.Transactions.Add(checking.Credit(Money.Parse(2m), at.AddYears(5), description: "middle"));
+            await db.SaveChangesAsync();
             db.Transactions.Add(checking.Credit(Money.Parse(1m), at.AddYears(10), description: "newest"));
             await db.SaveChangesAsync();
         }

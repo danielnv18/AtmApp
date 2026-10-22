@@ -11,10 +11,10 @@ public interface IAccountService
     Task<TransferReceipt> TransferAsync(Guid fromAccountId, Guid toAccountId, Money amount, CancellationToken ct = default);
 }
 
-// Position of the last row a client has seen, in history order (newest first, then Id).
-public sealed record HistoryCursor(DateTimeOffset TimestampUtc, Guid Id)
+// Position of the last row a client has seen in the account's ledger, which history lists newest first.
+public sealed record HistoryCursor(long Sequence)
 {
-    public static HistoryCursor After(Transaction row) => new(row.TimestampUtc, row.Id);
+    public static HistoryCursor After(Transaction row) => new(row.Sequence);
 }
 
 public sealed record HistoryPage(IReadOnlyList<Transaction> Items, HistoryCursor? Next);

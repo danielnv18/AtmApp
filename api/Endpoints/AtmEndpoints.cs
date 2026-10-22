@@ -100,23 +100,20 @@ public sealed record HistoryResponse(IReadOnlyList<TransactionResponse> Items, s
 internal static class CursorToken
 {
     public static string Encode(HistoryCursor cursor) =>
-        Base64UrlTextEncoder.Encode(Encoding.UTF8.GetBytes($"{cursor.TimestampUtc.UtcTicks}:{cursor.Id:N}"));
+        Base64UrlTextEncoder.Encode(Encoding.UTF8.GetBytes(cursor.Sequence.ToString(CultureInfo.InvariantCulture)));
 
     public static bool TryDecode(string token, [NotNullWhen(true)] out HistoryCursor? cursor)
     {
         cursor = null;
         try
         {
-            var parts = Encoding.UTF8.GetString(Base64UrlTextEncoder.Decode(token)).Split(':');
-            if (parts.Length != 2
-                || !long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var ticks)
-                || ticks > DateTimeOffset.MaxValue.UtcTicks
-                || !Guid.TryParseExact(parts[1], "N", out var id))
+            var text = Encoding.UTF8.GetString(Base64UrlTextEncoder.Decode(token));
+            if (!long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) || sequence <= 0)
             {
                 return false;
             }
 
-            cursor = new HistoryCursor(new DateTimeOffset(ticks, TimeSpan.Zero), id);
+            cursor = new HistoryCursor(sequence);
             return true;
         }
         catch (FormatException)

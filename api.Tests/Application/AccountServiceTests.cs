@@ -147,7 +147,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
     {
         await using var db = _database.NewContext();
         var service = NewService(db);
-        // Five rows share one timestamp, so page boundaries fall inside a tie and rely on the Id tie-break.
+        // Five rows share one timestamp, so only the ledger sequence keeps page boundaries stable.
         for (var i = 0; i < 5; i++)
         {
             await service.DepositAsync(_checking, Money.Parse(1m));
@@ -176,6 +176,38 @@ public sealed class AccountServiceTests : IAsyncLifetime
         Assert.Equal(3, pages);
     }
 
+    [Fact]
+    public async Task Every_ledger_is_a_gapless_chain_that_ends_at_the_account_balance()
+    {
+        await using (var db = _database.NewContext())
+        {
+            var service = NewService(db);
+            await service.DepositAsync(_checking, Money.Parse(12.34m));
+            await service.TransferAsync(_checking, _savings, Money.Parse(300m));
+            await service.WithdrawAsync(_savings, Money.Parse(0.01m));
+            await service.TransferAsync(_savings, _checking, Money.Parse(99.99m));
+        }
+
+        await using var verify = _database.NewContext();
+        foreach (var account in await verify.Accounts.ToListAsync())
+        {
+            var ledger = await verify.Transactions
+                .Where(t => t.AccountId == account.Id)
+                .OrderBy(t => t.Sequence)
+                .ToListAsync();
+
+            Assert.Equal(Enumerable.Range(1, ledger.Count).Select(i => (long)i), ledger.Select(t => t.Sequence));
+            var running = 0m;
+            Assert.All(ledger, row =>
+            {
+                running += row.Type == TransactionType.Deposit ? row.Amount : -row.Amount;
+                Assert.Equal(running, row.BalanceAfter);
+            });
+            Assert.Equal(account.Balance, ledger[^1].BalanceAfter);
+            Assert.Equal(ledger.Count, account.LastSequence);
+        }
+    }
+
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
@@ -193,8 +225,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
             await using var other = new SqliteConnection(eventData.Context!.Database.GetConnectionString());
             await other.OpenAsync(cancellationToken);
             await using var command = other.CreateCommand();
-            command.CommandText = "UPDATE \"Accounts\" SET \"ConcurrencyVersion\" = $version WHERE \"Id\" = $id";
-            command.Parameters.AddWithValue("$version", Guid.NewGuid().ToString().ToUpperInvariant());
+            command.CommandText = "UPDATE \"Accounts\" SET \"LastSequence\" = \"LastSequence\" + 1 WHERE \"Id\" = $id";
             command.Parameters.AddWithValue("$id", accountId.ToString().ToUpperInvariant());
             Assert.Equal(1, await command.ExecuteNonQueryAsync(cancellationToken));
             return result;

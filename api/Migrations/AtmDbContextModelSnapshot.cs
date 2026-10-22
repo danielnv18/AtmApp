@@ -26,9 +26,9 @@ namespace AtmApp.Api.Migrations
                     b.Property<long>("Balance")
                         .HasColumnType("INTEGER");
 
-                    b.Property<Guid>("ConcurrencyVersion")
+                    b.Property<long>("LastSequence")
                         .IsConcurrencyToken()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -65,6 +65,9 @@ namespace AtmApp.Api.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("Sequence")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long>("TimestampUtc")
                         .HasColumnType("INTEGER");
 
@@ -75,8 +78,8 @@ namespace AtmApp.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AccountId", "TimestampUtc")
-                        .IsDescending(false, true);
+                    b.HasIndex("AccountId", "Sequence")
+                        .IsUnique();
 
                     b.ToTable("Transactions", t =>
                         {

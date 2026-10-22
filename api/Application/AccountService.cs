@@ -23,14 +23,11 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
         // rows inserted at the top between requests can't shift items into the next page.
         if (after is not null)
         {
-            query = query.Where(t => t.TimestampUtc < after.TimestampUtc
-                || (t.TimestampUtc == after.TimestampUtc && t.Id.CompareTo(after.Id) < 0));
+            query = query.Where(t => t.Sequence < after.Sequence);
         }
 
         var rows = await query
-            .OrderByDescending(t => t.TimestampUtc)
-            // Both sides of a transfer share a timestamp; the Id tie-break keeps paging stable.
-            .ThenByDescending(t => t.Id)
+            .OrderByDescending(t => t.Sequence)
             // One extra row tells us whether another page exists without a COUNT query.
             .Take(limit + 1)
             .ToListAsync(ct);

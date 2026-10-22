@@ -14,7 +14,7 @@ public class AtmDbContext(DbContextOptions<AtmDbContext> options) : DbContext(op
         cents => cents / 100m);
 
     // EF stores DateTimeOffset as TEXT in SQLite, which can't be sorted or compared in SQL.
-    // UTC ticks are a plain integer, so history queries order by time inside the database.
+    // UTC ticks are a plain integer, so queries can order and filter by time inside the database.
     private static readonly ValueConverter<DateTimeOffset, long> UtcTicks = new(
         timestamp => timestamp.UtcTicks,
         ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
@@ -30,10 +30,10 @@ public class AtmDbContext(DbContextOptions<AtmDbContext> options) : DbContext(op
             account.HasKey(a => a.Id);
             account.Property(a => a.Name).IsRequired().HasMaxLength(100);
             account.Property(a => a.Balance).HasConversion(Cents);
-            // Updates include "WHERE ConcurrencyVersion = <value we loaded>". Account rotates the
-            // version on every balance change, so a write based on a stale read matches zero rows
+            // Updates include "WHERE LastSequence = <value we loaded>". Account advances the
+            // sequence on every balance change, so a write based on a stale read matches zero rows
             // and fails instead of silently overwriting another request's balance.
-            account.Property(a => a.ConcurrencyVersion).IsConcurrencyToken();
+            account.Property(a => a.LastSequence).IsConcurrencyToken();
         });
 
         modelBuilder.Entity<Transaction>(transaction =>
@@ -51,8 +51,11 @@ public class AtmDbContext(DbContextOptions<AtmDbContext> options) : DbContext(op
             transaction.Property(t => t.Description).HasMaxLength(200);
             // The ledger is the audit trail: deleting an account must never cascade away its history.
             transaction.HasOne<Account>().WithMany().HasForeignKey(t => t.AccountId).OnDelete(DeleteBehavior.Restrict);
-            // Matches the history query (one account, newest first) so it reads the index in order.
-            transaction.HasIndex(t => new { t.AccountId, t.TimestampUtc }).IsDescending(false, true);
+            // One row per position in each account's chain; also serves the history query in order.
+            // The append-only and chain rules are triggers (see the AppendOnlyLedger migration). EF
+            // orders one SaveChanges' inserts by key, not by Add order, so save at most one new row
+            // per account per SaveChanges or the chain trigger may see them out of sequence.
+            transaction.HasIndex(t => new { t.AccountId, t.Sequence }).IsUnique();
         });
     }
 }
