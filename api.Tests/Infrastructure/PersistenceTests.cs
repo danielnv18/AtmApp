@@ -35,6 +35,14 @@ public sealed class PersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Migrations_cover_the_current_model()
+    {
+        await using var db = NewContext();
+
+        Assert.False(db.Database.HasPendingModelChanges());
+    }
+
+    [Fact]
     public async Task Restarting_the_app_does_not_seed_again()
     {
         await using (var db = NewContext())
