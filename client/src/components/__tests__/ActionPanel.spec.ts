@@ -17,14 +17,11 @@ vi.mock('@/api/atmClient', async (importOriginal) => {
   }
 })
 
-vi.mock('vue-sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
-
 let wrapper: VueWrapper | undefined
 
 afterEach(() => {
   wrapper?.unmount()
   wrapper = undefined
-  document.body.innerHTML = ''
 })
 
 const checking = () => account({ id: 'chk', name: 'Checking', balance: 100 })
@@ -34,7 +31,6 @@ const savings = () => account({ id: 'sav', name: 'Savings', balance: 500 })
 async function mountPanel(tab: Operation, accountId = 'chk') {
   vi.resetModules()
   const { atmClient, ApiError } = await import('@/api/atmClient')
-  const { toast } = await import('vue-sonner')
   const { useAtm } = await import('@/composables/useAtm')
   const { default: ActionPanel } = await import('@/components/ActionPanel.vue')
 
@@ -44,154 +40,210 @@ async function mountPanel(tab: Operation, accountId = 'chk') {
   await useAtm().refresh()
   api.getAccounts.mockClear()
 
-  wrapper = mount(ActionPanel, { props: { tab, accountId }, attachTo: document.body })
+  wrapper = mount(ActionPanel, { props: { tab, accountId } })
   await flushPromises()
 
   const panel = wrapper
-  const amountInput = () => panel.get<HTMLInputElement>(`#${tab}-amount`)
-  const submit = () => panel.get<HTMLButtonElement>('button[type="submit"]')
-  const bodyButton = (label: string) =>
-    [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
-  const dialog = () => document.body.querySelector('[role="dialog"]')
+  const amountInput = () => panel.get<HTMLInputElement>('#amount')
+  const button = (label: string) => panel.findAll('button').find((b) => b.text() === label)
+  const reviewButton = () => panel.get<HTMLButtonElement>('button[type="submit"]')
+  const help = () => panel.get('[data-testid="amount-help"]').text()
 
   async function enter(value: string) {
     await amountInput().setValue(value)
   }
-  async function submitForm() {
+  async function review() {
     await panel.get('form').trigger('submit')
+  }
+  async function confirm() {
+    await button('Confirm')!.trigger('click')
     await flushPromises()
   }
-  async function chooseToAccount(id: string) {
-    // Reka Select does not open in jsdom, so drive the "To" AccountSelect's v-model directly.
-    const selects = panel.findAllComponents({ name: 'AccountSelect' })
-    await selects[1]!.vm.$emit('update:modelValue', id)
-  }
 
-  return { api, ApiError, toast: vi.mocked(toast), panel, amountInput, submit, bodyButton, dialog, enter, submitForm, chooseToAccount }
+  return { api, ApiError, panel, amountInput, button, reviewButton, help, enter, review, confirm }
 }
 
-describe('submit button', () => {
+describe('review button', () => {
   test.each(['', 'abc', '0', '1.234'])('is disabled for amount %j', async (value) => {
-    const { enter, submit } = await mountPanel('deposit')
+    const { enter, reviewButton } = await mountPanel('deposit')
     await enter(value)
-    expect(submit().element.disabled).toBe(true)
+    expect(reviewButton().element.disabled).toBe(true)
   })
 
   test('is enabled for a valid amount', async () => {
-    const { enter, submit } = await mountPanel('deposit')
+    const { enter, reviewButton } = await mountPanel('deposit')
     await enter('20')
-    expect(submit().element.disabled).toBe(false)
+    expect(reviewButton().element.disabled).toBe(false)
   })
 
-  test('is disabled while an operation is pending', async () => {
-    const { api, enter, submit, submitForm } = await mountPanel('deposit')
-    const call = deferred<Transaction>()
-    api.deposit.mockReturnValue(call.promise)
-    await enter('20')
+  test('explains a malformed amount inline', async () => {
+    const { enter, help, amountInput } = await mountPanel('deposit')
+    await enter('abc')
+    expect(help()).toContain('Enter an amount greater than zero')
+    expect(amountInput().attributes('aria-invalid')).toBe('true')
+  })
+})
 
-    await submitForm()
-    expect(submit().element.disabled).toBe(true)
+describe('inline validation', () => {
+  test('a withdrawal above the balance is blocked with the shortfall', async () => {
+    const { enter, help, reviewButton } = await mountPanel('withdraw')
+    await enter('150')
+    expect(help()).toContain('$50.00 more than is available')
+    expect(reviewButton().element.disabled).toBe(true)
+  })
 
-    call.resolve(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
-    await flushPromises()
-    await enter('5')
-    expect(submit().element.disabled).toBe(false)
+  test('a deposit above the balance is allowed', async () => {
+    const { enter, reviewButton } = await mountPanel('deposit')
+    await enter('150')
+    expect(reviewButton().element.disabled).toBe(false)
+  })
+
+  test('shows the projected balance for a valid amount', async () => {
+    const { enter, help } = await mountPanel('withdraw')
+    await enter('30')
+    expect(help()).toBe('New balance: $70.00')
+  })
+
+  test('shows the available balance before an amount is entered', async () => {
+    const { help } = await mountPanel('withdraw')
+    expect(help()).toBe('Available: $100.00')
+  })
+})
+
+describe('quick amounts', () => {
+  test('a chip fills the amount', async () => {
+    const { button, amountInput } = await mountPanel('deposit')
+    await button('$50')!.trigger('click')
+    expect(amountInput().element.value).toBe('50')
+  })
+
+  test('All fills the full balance for a withdrawal', async () => {
+    const { button, amountInput } = await mountPanel('withdraw')
+    await button('All')!.trigger('click')
+    expect(amountInput().element.value).toBe('100.00')
+  })
+
+  test('a deposit has no All chip', async () => {
+    const { button } = await mountPanel('deposit')
+    expect(button('All')).toBeUndefined()
   })
 })
 
 describe('deposit and withdraw', () => {
-  test('a deposit toasts the amount and account name and clears the amount', async () => {
-    const { api, toast, enter, submitForm, amountInput } = await mountPanel('deposit')
-    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', amount: 1234.5, balanceAfter: 1334.5 }))
-    await enter('1234.5')
+  test('reviewing does not call the API', async () => {
+    const { api, enter, review, panel } = await mountPanel('deposit')
+    await enter('20')
 
-    await submitForm()
+    await review()
 
-    expect(api.deposit).toHaveBeenCalledWith('chk', 1234.5)
-    expect(toast.success).toHaveBeenCalledWith('Deposited $1,234.50 to Checking')
-    expect(amountInput().element.value).toBe('')
+    expect(panel.get('[data-testid="review"]').text()).toContain('$20.00')
+    expect(api.deposit).not.toHaveBeenCalled()
   })
 
-  test('a withdrawal toasts the amount and account name', async () => {
-    const { api, toast, enter, submitForm } = await mountPanel('withdraw', 'sav')
-    api.withdraw.mockResolvedValue(ledgerRow({ accountId: 'sav', type: 'Withdrawal', amount: 50, balanceAfter: 450 }))
-    await enter('50')
+  test('Back returns to the form and keeps the amount', async () => {
+    const { enter, review, button, amountInput } = await mountPanel('deposit')
+    await enter('20')
+    await review()
 
-    await submitForm()
-
-    expect(api.withdraw).toHaveBeenCalledWith('sav', 50)
-    expect(toast.success).toHaveBeenCalledWith('Withdrew $50.00 from Savings')
-  })
-
-  test('the quick-withdraw $20 button fills the amount', async () => {
-    const { panel, amountInput } = await mountPanel('withdraw')
-    const quick = panel.findAll('button').find((b) => b.text() === '$20')!
-
-    await quick.trigger('click')
+    await button('Back')!.trigger('click')
 
     expect(amountInput().element.value).toBe('20')
   })
+
+  test('a confirmed deposit shows a receipt with the new balance', async () => {
+    const { api, enter, review, confirm, panel } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', amount: 1234.5, balanceAfter: 1334.5 }))
+    await enter('1234.5')
+    await review()
+
+    await confirm()
+
+    expect(api.deposit).toHaveBeenCalledWith('chk', 1234.5)
+    const receipt = panel.get('[data-testid="receipt"]').text()
+    expect(receipt).toContain('Deposit complete')
+    expect(receipt).toContain('$1,234.50 deposited to Checking')
+    expect(receipt).toContain('$1,334.50')
+  })
+
+  test('a confirmed withdrawal names the amount and account', async () => {
+    const { api, enter, review, confirm, panel } = await mountPanel('withdraw', 'sav')
+    api.withdraw.mockResolvedValue(ledgerRow({ accountId: 'sav', type: 'Withdrawal', amount: 50, balanceAfter: 450 }))
+    await enter('50')
+    await review()
+
+    await confirm()
+
+    expect(api.withdraw).toHaveBeenCalledWith('sav', 50)
+    expect(panel.get('[data-testid="receipt"]').text()).toContain('$50.00 withdrawn from Savings')
+  })
+
+  test('Make another transaction returns to an empty form', async () => {
+    const { api, enter, review, confirm, button, amountInput } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+
+    await button('Make another transaction')!.trigger('click')
+
+    expect(amountInput().element.value).toBe('')
+  })
+
+  test('Confirm is disabled while the call is pending', async () => {
+    const { api, enter, review, button } = await mountPanel('deposit')
+    const call = deferred<Transaction>()
+    api.deposit.mockReturnValue(call.promise)
+    await enter('20')
+    await review()
+
+    await button('Confirm')!.trigger('click')
+    expect((button('Confirm')!.element as HTMLButtonElement).disabled).toBe(true)
+
+    call.resolve(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await flushPromises()
+  })
 })
 
-describe('transfer confirmation', () => {
-  async function readyTransfer() {
-    const ctx = await mountPanel('transfer', 'chk')
-    await ctx.chooseToAccount('sav')
-    await ctx.enter('75')
-    await ctx.submitForm()
-    return ctx
-  }
+describe('transfer', () => {
+  test('the destination is the other account', async () => {
+    const { panel } = await mountPanel('transfer', 'chk')
+    expect(panel.get('[data-testid="transfer-from"]').text()).toBe('Checking')
+    expect(panel.get('[data-testid="transfer-to"]').text()).toBe('Savings')
+  })
 
-  test('submitting opens the confirm dialog without calling the API', async () => {
-    const { api, dialog } = await readyTransfer()
+  test('swap selects the other account as the source', async () => {
+    const { panel } = await mountPanel('transfer', 'chk')
 
-    expect(dialog()?.textContent).toContain('Move $75.00 from Checking to Savings?')
+    await panel.get('button[aria-label="Swap accounts"]').trigger('click')
+
+    expect(panel.emitted('update:accountId')?.[0]).toEqual(['sav'])
+  })
+
+  test('review names both accounts and nothing is sent until Confirm', async () => {
+    const { api, enter, review, panel } = await mountPanel('transfer', 'chk')
+    await enter('75')
+
+    await review()
+
+    const text = panel.get('[data-testid="review"]').text()
+    expect(text).toContain('Checking')
+    expect(text).toContain('Savings')
+    expect(text).toContain('$75.00')
     expect(api.transfer).not.toHaveBeenCalled()
   })
 
-  test('Confirm calls the API, toasts and closes the dialog', async () => {
-    const { api, toast, bodyButton, dialog } = await readyTransfer()
+  test('Confirm calls the API and shows the receipt', async () => {
+    const { api, enter, review, confirm, panel } = await mountPanel('transfer', 'chk')
     api.transfer.mockResolvedValue(
       transferReceipt({ accountId: 'chk', balanceAfter: 25 }, { accountId: 'sav', balanceAfter: 575 }, 75),
     )
+    await enter('75')
+    await review()
 
-    bodyButton('Confirm transfer')!.click()
-    await flushPromises()
+    await confirm()
 
     expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75)
-    expect(toast.success).toHaveBeenCalledWith('Transferred $75.00 from Checking to Savings')
-    expect(dialog()).toBeNull()
-  })
-
-  test('Cancel closes the dialog and calls nothing', async () => {
-    const { api, bodyButton, dialog } = await readyTransfer()
-
-    bodyButton('Cancel')!.click()
-    await flushPromises()
-
-    expect(dialog()).toBeNull()
-    expect(api.transfer).not.toHaveBeenCalled()
-  })
-
-  test('a failed transfer closes the dialog and keeps the amount', async () => {
-    const { api, ApiError, toast, bodyButton, dialog, amountInput } = await readyTransfer()
-    api.transfer.mockRejectedValue(new ApiError(422, 'Insufficient funds', 'Balance is $100.00.'))
-
-    bodyButton('Confirm transfer')!.click()
-    await flushPromises()
-
-    expect(toast.error).toHaveBeenCalled()
-    expect(dialog()).toBeNull()
-    expect(amountInput().element.value).toBe('75')
-  })
-
-  test('submit stays disabled until a destination account is chosen', async () => {
-    const { enter, submit, chooseToAccount } = await mountPanel('transfer', 'chk')
-    await enter('75')
-    expect(submit().element.disabled).toBe(true)
-
-    await chooseToAccount('sav')
-    expect(submit().element.disabled).toBe(false)
+    expect(panel.get('[data-testid="receipt"]').text()).toContain('$75.00 moved from Checking to Savings')
   })
 })
 
@@ -200,36 +252,41 @@ describe('error reporting', () => {
     const ctx = await mountPanel('withdraw')
     ctx.api.withdraw.mockRejectedValue(error(ctx))
     await ctx.enter('20')
-    await ctx.submitForm()
+    await ctx.review()
+    await ctx.confirm()
     return ctx
   }
 
-  test('422 reports insufficient funds with the server detail', async () => {
-    const { toast, amountInput } = await failWithdraw(
+  test('422 reports insufficient funds with the server detail and keeps the amount', async () => {
+    const { panel, amountInput } = await failWithdraw(
       ({ ApiError }) => new ApiError(422, 'Unprocessable', 'Balance is $5.00.'),
     )
 
-    expect(toast.error).toHaveBeenCalledWith('Insufficient funds', { description: 'Balance is $5.00.' })
+    const alert = panel.get('[role="alert"]').text()
+    expect(alert).toContain('Insufficient funds')
+    expect(alert).toContain('Balance is $5.00.')
     expect(amountInput().element.value).toBe('20')
   })
 
   test('409 reports a conflict and re-fetches accounts', async () => {
-    const { api, toast } = await failWithdraw(({ ApiError }) => new ApiError(409, 'Conflict', null))
+    const { api, panel } = await failWithdraw(({ ApiError }) => new ApiError(409, 'Conflict', null))
 
-    expect(toast.error).toHaveBeenCalledWith('The balance changed while you were working. Please try again.')
+    expect(panel.get('[role="alert"]').text()).toContain('The balance changed while you were working')
     expect(api.getAccounts).toHaveBeenCalledTimes(1)
   })
 
   test('a non-ApiError reports a connection problem', async () => {
-    const { toast, api } = await failWithdraw(() => new TypeError('Failed to fetch'))
+    const { panel, api } = await failWithdraw(() => new TypeError('Failed to fetch'))
 
-    expect(toast.error).toHaveBeenCalledWith('Could not reach the server. Check your connection and try again.')
+    expect(panel.get('[role="alert"]').text()).toContain('Could not reach the server')
     expect(api.getAccounts).not.toHaveBeenCalled()
   })
 
   test('any other ApiError reports its title and detail', async () => {
-    const { toast } = await failWithdraw(({ ApiError }) => new ApiError(404, 'Account not found', 'No account chk.'))
+    const { panel } = await failWithdraw(({ ApiError }) => new ApiError(404, 'Account not found', 'No account chk.'))
 
-    expect(toast.error).toHaveBeenCalledWith('Account not found', { description: 'No account chk.' })
+    const alert = panel.get('[role="alert"]').text()
+    expect(alert).toContain('Account not found')
+    expect(alert).toContain('No account chk.')
   })
 })

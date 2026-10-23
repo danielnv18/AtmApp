@@ -13,7 +13,8 @@ export class AtmPage {
   readonly ledger: Locator
   readonly ledgerRows: Locator
   readonly amountInput: Locator
-  readonly confirmDialog: Locator
+  readonly amountHelp: Locator
+  readonly receipt: Locator
 
   constructor(readonly page: Page) {
     page.on('console', (m) => {
@@ -24,7 +25,8 @@ export class AtmPage {
     this.ledger = page.getByTestId('ledger')
     this.ledgerRows = this.ledger.getByTestId('ledger-row')
     this.amountInput = this.panel.getByLabel('Amount (USD)')
-    this.confirmDialog = page.getByRole('dialog', { name: 'Confirm transfer' })
+    this.amountHelp = this.panel.getByTestId('amount-help')
+    this.receipt = this.panel.getByTestId('receipt')
   }
 
   async goto() {
@@ -52,73 +54,62 @@ export class AtmPage {
     return { Checking: await this.balance('Checking'), Savings: await this.balance('Savings') }
   }
 
-  toast(text: string | RegExp) {
-    return this.page.locator('[data-sonner-toast]').filter({ hasText: text })
+  alert(text: string | RegExp) {
+    return this.page.getByRole('alert').filter({ hasText: text })
   }
 
-  accountSelect(label: 'Account' | 'From' | 'To' | 'Ledger account') {
-    const scope = label === 'Ledger account' ? this.ledger : this.panel
-    return scope.getByRole('combobox', { name: label, exact: true })
-  }
-
-  submitButton(op: OperationLabel) {
-    return this.panel.getByRole('button', { name: op, exact: true })
+  reviewButton(op: OperationLabel) {
+    return this.panel.getByRole('button', { name: `Review ${op.toLowerCase()}`, exact: true })
   }
 
   ledgerRow(index: number) {
     const row = this.ledgerRows.nth(index)
-    const cells = row.getByRole('cell')
     return {
       row,
-      type: cells.nth(1),
-      description: cells.nth(2),
+      type: row.getByTestId('ledger-type'),
+      description: row.getByTestId('ledger-description'),
       amount: row.getByTestId('ledger-amount'),
       balance: row.getByTestId('ledger-balance'),
     }
   }
 
+  /** Selects the account card and the operation; the activity list follows the account. */
   async startOperation(name: AccountName, op: OperationLabel) {
-    await this.card(name).getByRole('button', { name: op, exact: true }).click()
+    await this.card(name).click()
+    await this.panel.getByRole('button', { name: op, exact: true }).click()
   }
 
   async fillAmount(amount: string) {
     await this.amountInput.fill(amount)
   }
 
-  async submit(op: OperationLabel) {
-    await this.submitButton(op).click()
+  async review(op: OperationLabel) {
+    await this.reviewButton(op).click()
   }
 
-  async chooseAccount(label: 'Account' | 'From' | 'To' | 'Ledger account', name: AccountName) {
-    await this.accountSelect(label).click()
-    await this.page.getByRole('option', { name: new RegExp(`^${name} \\(`) }).click()
+  confirmButton() {
+    return this.panel.getByRole('button', { name: 'Confirm', exact: true })
   }
 
-  async chooseTransferTarget(name: AccountName) {
-    await this.chooseAccount('To', name)
+  async confirm() {
+    await this.confirmButton().click()
   }
 
-  async selectLedger(name: AccountName) {
-    await this.chooseAccount('Ledger account', name)
-  }
-
-  async confirmTransfer() {
-    await this.confirmDialog.getByRole('button', { name: 'Confirm transfer' }).click()
-  }
-
-  async cancelTransfer() {
-    await this.confirmDialog.getByRole('button', { name: 'Cancel' }).click()
+  async back() {
+    await this.panel.getByRole('button', { name: 'Back', exact: true }).click()
   }
 
   async withdraw(name: AccountName, amount: string) {
     await this.startOperation(name, 'Withdraw')
     await this.fillAmount(amount)
-    await this.submit('Withdraw')
+    await this.review('Withdraw')
+    await this.confirm()
   }
 
   async deposit(name: AccountName, amount: string) {
     await this.startOperation(name, 'Deposit')
     await this.fillAmount(amount)
-    await this.submit('Deposit')
+    await this.review('Deposit')
+    await this.confirm()
   }
 }

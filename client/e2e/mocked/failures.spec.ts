@@ -2,12 +2,12 @@ import { expect, mockedTest as test } from '../support/test'
 
 const serverError = { status: 500, title: 'Unexpected error', detail: 'An unexpected error occurred.' }
 
-test('accounts outage shows an alert and Retry recovers', async ({ atm, fake, page }) => {
+test('accounts outage shows an alert and Retry recovers', async ({ atm, fake }) => {
   fake.fail('accounts', serverError)
 
   await atm.goto()
 
-  const alert = page.getByRole('alert').filter({ hasText: 'Could not load accounts' })
+  const alert = atm.alert('Could not load accounts')
   await expect(alert, 'outage alert').toBeVisible()
   await expect(atm.card('Checking'), 'no cards without accounts').toHaveCount(0)
 
@@ -18,16 +18,16 @@ test('accounts outage shows an alert and Retry recovers', async ({ atm, fake, pa
   await expect(atm.balanceLabel('Savings')).toHaveText('$500.00')
 })
 
-test('history outage leaves the cards working', async ({ atm, fake, page }) => {
+test('history outage leaves the cards working', async ({ atm, fake }) => {
   fake.fail('history', serverError)
 
   await atm.open()
 
-  await expect(page.getByRole('alert').filter({ hasText: 'Could not load history' }), 'history alert').toBeVisible()
+  await expect(atm.alert('Could not load history'), 'history alert').toBeVisible()
 
   await atm.deposit('Savings', '25')
 
-  await expect(atm.toast('Deposited $25.00 to Savings'), 'deposit still works').toBeVisible()
+  await expect(atm.receipt, 'deposit still works').toContainText('$25.00 deposited to Savings')
   await expect(atm.balanceLabel('Savings')).toHaveText('$525.00')
 })
 
@@ -37,10 +37,20 @@ test('network failure during a withdrawal leaves the balance alone', async ({ at
 
   await atm.withdraw('Checking', '20')
 
-  await expect(atm.toast('Could not reach the server'), 'connection error toast').toBeVisible()
+  await expect(atm.alert('Could not reach the server'), 'connection error').toBeVisible()
   await expect(atm.balanceLabel('Checking')).toHaveText('$1,000.00')
-  await expect(atm.submitButton('Withdraw'), 'user can try again').toBeEnabled()
   await expect(atm.amountInput, 'amount is kept for the retry').toHaveValue('20')
+  await expect(atm.reviewButton('Withdraw'), 'user can try again').toBeEnabled()
+})
+
+test('a server-side insufficient funds rejection is shown inline', async ({ atm, fake }) => {
+  fake.fail('withdraw', { status: 422, title: 'Unprocessable', detail: 'Balance is $1,000.00.' })
+  await atm.open()
+
+  await atm.withdraw('Checking', '20')
+
+  await expect(atm.alert('Insufficient funds')).toContainText('Balance is $1,000.00.')
+  await expect(atm.balanceLabel('Checking')).toHaveText('$1,000.00')
 })
 
 test('a conflict re-fetches the balance another client changed', async ({ atm, fake }) => {
@@ -54,6 +64,6 @@ test('a conflict re-fetches the balance another client changed', async ({ atm, f
 
   await atm.withdraw('Checking', '20')
 
-  await expect(atm.toast('The balance changed while you were working'), 'conflict toast').toBeVisible()
+  await expect(atm.alert('The balance changed while you were working'), 'conflict message').toBeVisible()
   await expect(atm.balanceLabel('Checking'), 'card shows the refreshed server balance').toHaveText('$900.00')
 })

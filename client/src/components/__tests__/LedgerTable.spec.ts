@@ -44,8 +44,8 @@ async function mountLedger(history: Transaction[] | Error) {
 
 const rowCells = (w: VueWrapper) =>
   w.findAll('[data-testid="ledger-row"]').map((row) => {
-    const cells = row.findAll('td').map((td) => td.text())
-    return { type: cells[1], amount: cells[3], balance: cells[4] }
+    const t = (id: string) => row.get(`[data-testid="${id}"]`).text()
+    return { type: t('ledger-type'), amount: t('ledger-amount'), balance: t('ledger-balance') }
   })
 
 describe('LedgerTable', () => {
@@ -60,8 +60,8 @@ describe('LedgerTable', () => {
     expect(rowCells(w)).toEqual([
       { type: 'Deposit', amount: '+$50.00', balance: '$150.00' },
       { type: 'Withdrawal', amount: '−$20.00', balance: '$130.00' },
-      { type: 'Transfer In', amount: '+$1,000.00', balance: '$1,130.00' },
-      { type: 'Transfer Out', amount: '−$30.00', balance: '$1,100.00' },
+      { type: 'Transfer in', amount: '+$1,000.00', balance: '$1,130.00' },
+      { type: 'Transfer out', amount: '−$30.00', balance: '$1,100.00' },
     ])
   })
 
