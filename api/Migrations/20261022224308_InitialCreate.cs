@@ -84,7 +84,8 @@ namespace AtmApp.Api.Migrations
                     OR NEW."BalanceAfter" IS NOT COALESCE(
                         (SELECT "BalanceAfter" FROM "Transactions"
                          WHERE "AccountId" = NEW."AccountId" AND "Sequence" = NEW."Sequence" - 1), 0)
-                        + CASE NEW."Type" WHEN 'Deposit' THEN NEW."Amount" WHEN 'Withdrawal' THEN -NEW."Amount" END
+                        + CASE NEW."Type" WHEN 'Deposit' THEN NEW."Amount" WHEN 'TransferIn' THEN NEW."Amount"
+                          WHEN 'Withdrawal' THEN -NEW."Amount" WHEN 'TransferOut' THEN -NEW."Amount" END
                 BEGIN
                     SELECT RAISE(ABORT, 'Ledger chain broken: a transaction must take the next sequence and carry the previous balance forward by its amount.');
                 END;

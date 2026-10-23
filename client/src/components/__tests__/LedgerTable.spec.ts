@@ -49,12 +49,12 @@ const rowCells = (w: VueWrapper) =>
   })
 
 describe('LedgerTable', () => {
-  test('labels each row from its type and correlationId and signs credits and debits', async () => {
+  test('labels each row from its type and signs credits and debits', async () => {
     const w = await mountLedger([
       ledgerRow({ accountId: 'chk', type: 'Deposit', amount: 50, balanceAfter: 150 }),
       ledgerRow({ accountId: 'chk', type: 'Withdrawal', amount: 20, balanceAfter: 130 }),
-      ledgerRow({ accountId: 'chk', type: 'Deposit', amount: 1000, balanceAfter: 1130, correlationId: 'c1' }),
-      ledgerRow({ accountId: 'chk', type: 'Withdrawal', amount: 30, balanceAfter: 1100, correlationId: 'c2' }),
+      ledgerRow({ accountId: 'chk', type: 'TransferIn', amount: 1000, balanceAfter: 1130, correlationId: 'c1' }),
+      ledgerRow({ accountId: 'chk', type: 'TransferOut', amount: 30, balanceAfter: 1100, correlationId: 'c2' }),
     ])
 
     expect(rowCells(w)).toEqual([

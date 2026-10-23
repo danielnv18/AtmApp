@@ -61,8 +61,8 @@ public sealed class AccountServiceTests : IAsyncLifetime
         Assert.Equal((800m, 700m, 4), await SnapshotAsync());
         Assert.Equal(2, linked.Count);
         Assert.Single(linked.Select(t => t.CorrelationId).Distinct());
-        Assert.Contains(linked, t => t.AccountId == _checking && t.Type == TransactionType.Withdrawal && t.BalanceAfter == 800m);
-        Assert.Contains(linked, t => t.AccountId == _savings && t.Type == TransactionType.Deposit && t.BalanceAfter == 700m);
+        Assert.Contains(linked, t => t.AccountId == _checking && t.Type == TransactionType.TransferOut && t.BalanceAfter == 800m);
+        Assert.Contains(linked, t => t.AccountId == _savings && t.Type == TransactionType.TransferIn && t.BalanceAfter == 700m);
     }
 
     [Fact]
@@ -113,12 +113,10 @@ public sealed class AccountServiceTests : IAsyncLifetime
         var service = NewService(db);
         var unknown = Guid.NewGuid();
 
-        var history = await Assert.ThrowsAsync<DomainException>(() => service.GetHistoryAsync(unknown, 10));
-        var transfer = await Assert.ThrowsAsync<DomainException>(
+        await Assert.ThrowsAsync<AccountNotFoundException>(() => service.GetHistoryAsync(unknown, 10));
+        await Assert.ThrowsAsync<AccountNotFoundException>(
             () => service.TransferAsync(_checking, unknown, Money.Parse(1m)));
 
-        Assert.Equal(DomainError.AccountNotFound, history.Error);
-        Assert.Equal(DomainError.AccountNotFound, transfer.Error);
         Assert.Equal((1000m, 500m, 2), await SnapshotAsync());
     }
 
@@ -200,7 +198,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
             var running = 0m;
             Assert.All(ledger, row =>
             {
-                running += row.Type == TransactionType.Deposit ? row.Amount : -row.Amount;
+                running += row.Type is TransactionType.Deposit or TransactionType.TransferIn ? row.Amount : -row.Amount;
                 Assert.Equal(running, row.BalanceAfter);
             });
             Assert.Equal(account.Balance, ledger[^1].BalanceAfter);

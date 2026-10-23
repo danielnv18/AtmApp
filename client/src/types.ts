@@ -1,6 +1,6 @@
 export type Account = { id: string; name: string; balance: number }
 
-export type TransactionType = 'Deposit' | 'Withdrawal'
+export type TransactionType = 'Deposit' | 'Withdrawal' | 'TransferIn' | 'TransferOut'
 
 export type Transaction = {
   id: string

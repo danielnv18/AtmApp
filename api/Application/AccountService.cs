@@ -14,7 +14,7 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
     {
         if (!await db.Accounts.AnyAsync(a => a.Id == accountId, ct))
         {
-            throw new DomainException(DomainError.AccountNotFound);
+            throw new AccountNotFoundException();
         }
 
         var query = db.Transactions.AsNoTracking().Where(t => t.AccountId == accountId);
@@ -40,7 +40,7 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
     public async Task<Transaction> DepositAsync(Guid accountId, Money amount, CancellationToken ct = default)
     {
         var account = await LoadAsync(accountId, ct);
-        var ledgerRow = account.Credit(amount, clock.GetUtcNow());
+        var ledgerRow = account.Deposit(amount, clock.GetUtcNow());
         db.Transactions.Add(ledgerRow);
         await db.SaveChangesAsync(ct);
         return ledgerRow;
@@ -49,7 +49,7 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
     public async Task<Transaction> WithdrawAsync(Guid accountId, Money amount, CancellationToken ct = default)
     {
         var account = await LoadAsync(accountId, ct);
-        var ledgerRow = account.Debit(amount, clock.GetUtcNow());
+        var ledgerRow = account.Withdraw(amount, clock.GetUtcNow());
         db.Transactions.Add(ledgerRow);
         await db.SaveChangesAsync(ct);
         return ledgerRow;
@@ -67,8 +67,8 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
         var correlationId = Guid.NewGuid();
         var now = clock.GetUtcNow();
 
-        var withdrawal = from.Debit(amount, now, correlationId, $"Transfer to {to.Name}");
-        var deposit = to.Credit(amount, now, correlationId, $"Transfer from {from.Name}");
+        var withdrawal = from.SendTransfer(amount, now, correlationId, $"Transfer to {to.Name}");
+        var deposit = to.ReceiveTransfer(amount, now, correlationId, $"Transfer from {from.Name}");
         db.Transactions.AddRange(withdrawal, deposit);
         // One SaveChanges runs both balance updates and both ledger inserts in a single database
         // transaction. If either account changed underneath us, the whole transfer rolls back.
@@ -79,5 +79,5 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
 
     private async Task<Account> LoadAsync(Guid accountId, CancellationToken ct) =>
         await db.Accounts.SingleOrDefaultAsync(a => a.Id == accountId, ct)
-        ?? throw new DomainException(DomainError.AccountNotFound);
+        ?? throw new AccountNotFoundException();
 }

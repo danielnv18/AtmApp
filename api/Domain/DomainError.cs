@@ -4,6 +4,5 @@ public enum DomainError
 {
     InvalidAmount,
     InsufficientFunds,
-    AccountNotFound,
     SameAccountTransfer,
 }

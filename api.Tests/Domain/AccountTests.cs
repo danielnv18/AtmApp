@@ -9,7 +9,7 @@ public class AccountTests
     private static Account Funded(decimal opening)
     {
         var account = Account.Open("checking");
-        account.Credit(Money.Parse(opening), Now);
+        account.Deposit(Money.Parse(opening), Now);
         return account;
     }
 
@@ -27,7 +27,7 @@ public class AccountTests
     {
         var account = Funded(100m);
 
-        var tx = account.Credit(Money.Parse(0.10m), Now);
+        var tx = account.Deposit(Money.Parse(0.10m), Now);
 
         Assert.Equal(100.10m, account.Balance);
         Assert.Equal(2, account.LastSequence);
@@ -42,7 +42,7 @@ public class AccountTests
     {
         var account = Funded(100m);
 
-        var tx = account.Debit(Money.Parse(30.25m), Now);
+        var tx = account.Withdraw(Money.Parse(30.25m), Now);
 
         Assert.Equal(69.75m, account.Balance);
         Assert.Equal(2, account.LastSequence);
@@ -57,7 +57,7 @@ public class AccountTests
     {
         var account = Funded(50m);
 
-        var ex = Assert.Throws<DomainException>(() => account.Debit(Money.Parse(50.01m), Now));
+        var ex = Assert.Throws<DomainException>(() => account.Withdraw(Money.Parse(50.01m), Now));
 
         Assert.Equal(DomainError.InsufficientFunds, ex.Error);
         Assert.Equal(50m, account.Balance);
@@ -69,7 +69,7 @@ public class AccountTests
     {
         var account = Funded(25m);
 
-        var tx = account.Debit(Money.Parse(25m), Now);
+        var tx = account.Withdraw(Money.Parse(25m), Now);
 
         Assert.Equal(0m, account.Balance);
         Assert.Equal(0m, tx.BalanceAfter);
@@ -82,10 +82,11 @@ public class AccountTests
         var correlationId = Guid.NewGuid();
         var localTime = new DateTimeOffset(2026, 1, 1, 7, 0, 0, TimeSpan.FromHours(-5));
 
-        var tx = account.Debit(Money.Parse(10m), localTime, correlationId, "ATM withdrawal");
+        var tx = account.SendTransfer(Money.Parse(10m), localTime, correlationId, "ATM withdrawal");
 
         Assert.NotEqual(Guid.Empty, tx.Id);
         Assert.Equal(account.Id, tx.AccountId);
+        Assert.Equal(TransactionType.TransferOut, tx.Type);
         Assert.Equal(correlationId, tx.CorrelationId);
         Assert.Equal("ATM withdrawal", tx.Description);
         Assert.Equal(localTime, tx.TimestampUtc);
@@ -99,10 +100,10 @@ public class AccountTests
 
         var ledger = new List<Transaction>
         {
-            account.Credit(Money.Parse(100m), Now),
-            account.Debit(Money.Parse(33.33m), Now),
-            account.Credit(Money.Parse(0.01m), Now),
-            account.Debit(Money.Parse(66.68m), Now),
+            account.Deposit(Money.Parse(100m), Now),
+            account.Withdraw(Money.Parse(33.33m), Now),
+            account.Deposit(Money.Parse(0.01m), Now),
+            account.Withdraw(Money.Parse(66.68m), Now),
         };
 
         Assert.Equal(0m, account.Balance);

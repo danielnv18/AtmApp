@@ -17,13 +17,25 @@ public sealed class Account
         Name = name,
     };
 
-    public Transaction Credit(Money amount, DateTimeOffset timestampUtc, Guid? correlationId = null, string? description = null)
+    public Transaction Deposit(Money amount, DateTimeOffset timestampUtc, string? description = null) =>
+        Credit(amount, TransactionType.Deposit, timestampUtc, null, description);
+
+    public Transaction Withdraw(Money amount, DateTimeOffset timestampUtc, string? description = null) =>
+        Debit(amount, TransactionType.Withdrawal, timestampUtc, null, description);
+
+    public Transaction ReceiveTransfer(Money amount, DateTimeOffset timestampUtc, Guid correlationId, string? description = null) =>
+        Credit(amount, TransactionType.TransferIn, timestampUtc, correlationId, description);
+
+    public Transaction SendTransfer(Money amount, DateTimeOffset timestampUtc, Guid correlationId, string? description = null) =>
+        Debit(amount, TransactionType.TransferOut, timestampUtc, correlationId, description);
+
+    private Transaction Credit(Money amount, TransactionType type, DateTimeOffset timestampUtc, Guid? correlationId, string? description)
     {
         Balance += amount.Value;
-        return Apply(amount, TransactionType.Deposit, timestampUtc, correlationId, description);
+        return Apply(amount, type, timestampUtc, correlationId, description);
     }
 
-    public Transaction Debit(Money amount, DateTimeOffset timestampUtc, Guid? correlationId = null, string? description = null)
+    private Transaction Debit(Money amount, TransactionType type, DateTimeOffset timestampUtc, Guid? correlationId, string? description)
     {
         if (amount.Value > Balance)
         {
@@ -31,7 +43,7 @@ public sealed class Account
         }
 
         Balance -= amount.Value;
-        return Apply(amount, TransactionType.Withdrawal, timestampUtc, correlationId, description);
+        return Apply(amount, type, timestampUtc, correlationId, description);
     }
 
     private Transaction Apply(Money amount, TransactionType type, DateTimeOffset timestampUtc, Guid? correlationId, string? description)

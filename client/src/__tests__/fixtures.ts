@@ -29,8 +29,8 @@ export function transferReceipt(
   const correlationId = nextId('corr')
   return {
     correlationId,
-    withdrawal: ledgerRow({ ...from, type: 'Withdrawal', amount, correlationId }),
-    deposit: ledgerRow({ ...to, type: 'Deposit', amount, correlationId }),
+    withdrawal: ledgerRow({ ...from, type: 'TransferOut', amount, correlationId }),
+    deposit: ledgerRow({ ...to, type: 'TransferIn', amount, correlationId }),
   }
 }
 

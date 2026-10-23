@@ -128,10 +128,10 @@ public sealed class PersistenceTests : IAsyncLifetime
         var a = await first.Accounts.SingleAsync(x => x.Name == "Checking");
         var b = await second.Accounts.SingleAsync(x => x.Name == "Checking");
 
-        first.Transactions.Add(a.Debit(Money.Parse(100m), DateTimeOffset.UtcNow));
+        first.Transactions.Add(a.Withdraw(Money.Parse(100m), DateTimeOffset.UtcNow));
         await first.SaveChangesAsync();
 
-        second.Transactions.Add(b.Debit(Money.Parse(100m), DateTimeOffset.UtcNow));
+        second.Transactions.Add(b.Withdraw(Money.Parse(100m), DateTimeOffset.UtcNow));
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => second.SaveChangesAsync());
 
         await using var verify = NewContext();
@@ -149,11 +149,11 @@ public sealed class PersistenceTests : IAsyncLifetime
         await using (var db = NewContext())
         {
             var savings = await db.Accounts.SingleAsync(x => x.Name == "Savings");
-            db.Transactions.Add(savings.Credit(Money.Parse(0.01m), at.AddMinutes(1)));
+            db.Transactions.Add(savings.Deposit(Money.Parse(0.01m), at.AddMinutes(1)));
             await db.SaveChangesAsync();
-            db.Transactions.Add(savings.Credit(Money.Parse(999_999_499.99m), at.AddMinutes(2)));
+            db.Transactions.Add(savings.Deposit(Money.Parse(999_999_499.99m), at.AddMinutes(2)));
             await db.SaveChangesAsync();
-            db.Transactions.Add(savings.Debit(Money.Parse(0.33m), at.AddMinutes(3)));
+            db.Transactions.Add(savings.Withdraw(Money.Parse(0.33m), at.AddMinutes(3)));
             await db.SaveChangesAsync();
         }
 
@@ -175,9 +175,9 @@ public sealed class PersistenceTests : IAsyncLifetime
         await using (var db = NewContext())
         {
             var checking = await db.Accounts.SingleAsync(x => x.Name == "Checking");
-            db.Transactions.Add(checking.Credit(Money.Parse(2m), at.AddYears(5), description: "middle"));
+            db.Transactions.Add(checking.Deposit(Money.Parse(2m), at.AddYears(5), description: "middle"));
             await db.SaveChangesAsync();
-            db.Transactions.Add(checking.Credit(Money.Parse(1m), at.AddYears(10), description: "newest"));
+            db.Transactions.Add(checking.Deposit(Money.Parse(1m), at.AddYears(10), description: "newest"));
             await db.SaveChangesAsync();
         }
 

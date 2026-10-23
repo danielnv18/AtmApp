@@ -1,4 +1,5 @@
 using System.Globalization;
+using AtmApp.Api.Application;
 using AtmApp.Api.Domain;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -18,7 +19,7 @@ public sealed class AtmExceptionHandler(IProblemDetailsService problemDetails, I
                     $"Amount must be greater than 0, at most {Money.MaxValue.ToString("N2", CultureInfo.InvariantCulture)}, and have at most 2 decimal places."),
             DomainException { Error: DomainError.SameAccountTransfer } =>
                 (StatusCodes.Status400BadRequest, "Same account transfer", "Source and destination accounts must differ."),
-            DomainException { Error: DomainError.AccountNotFound } =>
+            AccountNotFoundException =>
                 (StatusCodes.Status404NotFound, "Account not found", "No account exists with the given id."),
             DomainException { Error: DomainError.InsufficientFunds } =>
                 (StatusCodes.Status422UnprocessableEntity, "Insufficient funds", "The account balance is too low for this operation."),

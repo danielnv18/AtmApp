@@ -59,7 +59,7 @@ The end-to-end tests start their own API on port 5199 and client on port 5174. T
 
 ## Reset the data
 
-Stop the API and delete `api/atm.db`. The next start recreates it with the opening balances.
+Stop the API and delete `api/atm.db`. The next start recreates it with the opening balances. Do this after pulling schema changes, such as the `TransferIn` and `TransferOut` ledger types.
 
 ## API errors
 

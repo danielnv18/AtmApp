@@ -211,13 +211,13 @@ export class FakeAtm {
 
   private credit(account: FakeAccount, cents: number, correlationId: string | null = null, description: string | null = null) {
     account.cents += cents
-    return this.record(account, 'Deposit', cents, correlationId, description)
+    return this.record(account, correlationId === null ? 'Deposit' : 'TransferIn', cents, correlationId, description)
   }
 
   private debit(account: FakeAccount, cents: number, correlationId: string | null = null, description: string | null = null) {
     if (cents > account.cents) throw new ProblemError(PROBLEMS.insufficientFunds)
     account.cents -= cents
-    return this.record(account, 'Withdrawal', cents, correlationId, description)
+    return this.record(account, correlationId === null ? 'Withdrawal' : 'TransferOut', cents, correlationId, description)
   }
 
   private record(

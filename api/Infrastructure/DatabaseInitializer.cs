@@ -24,7 +24,7 @@ public static class DatabaseInitializer
         {
             // Open at zero and Credit the opening amount so the balance is backed by a ledger row.
             var account = Account.Open(name);
-            var ledgerRow = account.Credit(Money.Parse(opening), now, description: OpeningDescription);
+            var ledgerRow = account.Deposit(Money.Parse(opening), now, description: OpeningDescription);
             db.Accounts.Add(account);
             db.Transactions.Add(ledgerRow);
         }

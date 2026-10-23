@@ -103,7 +103,7 @@ public sealed class AtmApiTests : IAsyncLifetime
         var accounts = await _client.GetAsync<AccountView[]>("/api/atm/accounts");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(("Withdrawal", "Deposit"), (receipt.Withdrawal.Type, receipt.Deposit.Type));
+        Assert.Equal(("TransferOut", "TransferIn"), (receipt.Withdrawal.Type, receipt.Deposit.Type));
         Assert.Equal(receipt.CorrelationId, receipt.Withdrawal.CorrelationId);
         Assert.Equal(receipt.CorrelationId, receipt.Deposit.CorrelationId);
         Assert.Equal([900m, 600m], accounts.Select(a => a.Balance));
@@ -307,7 +307,7 @@ public sealed class AtmApiTests : IAsyncLifetime
         Assert.All(receipts, receipt =>
         {
             var linked = rows.Where(t => t.CorrelationId == receipt.CorrelationId).ToList();
-            Assert.Equal(["Deposit", "Withdrawal"], linked.Select(t => t.Type).Order());
+            Assert.Equal(["TransferIn", "TransferOut"], linked.Select(t => t.Type).Order());
             Assert.NotEqual(linked[0].AccountId, linked[1].AccountId);
         });
         Assert.Equal(receipts.Length * 2, rows.Count(t => t.CorrelationId is not null));
@@ -338,7 +338,7 @@ public sealed class AtmApiTests : IAsyncLifetime
         var running = 0m;
         foreach (var row in newestFirst.Reverse())
         {
-            running += row.Type == "Deposit" ? row.Amount : -row.Amount;
+            running += row.Type is "Deposit" or "TransferIn" ? row.Amount : -row.Amount;
             Assert.Equal(running, row.BalanceAfter);
         }
 
@@ -355,8 +355,8 @@ public sealed class AtmApiTests : IAsyncLifetime
         var withdrawal = (await LedgerAsync(_checking))[0];
         var deposit = (await LedgerAsync(_savings))[0];
 
-        Assert.Equal((receipt.CorrelationId, "Withdrawal", "Transfer to Savings"), (withdrawal.CorrelationId, withdrawal.Type, withdrawal.Description));
-        Assert.Equal((receipt.CorrelationId, "Deposit", "Transfer from Checking"), (deposit.CorrelationId, deposit.Type, deposit.Description));
+        Assert.Equal((receipt.CorrelationId, "TransferOut", "Transfer to Savings"), (withdrawal.CorrelationId, withdrawal.Type, withdrawal.Description));
+        Assert.Equal((receipt.CorrelationId, "TransferIn", "Transfer from Checking"), (deposit.CorrelationId, deposit.Type, deposit.Description));
     }
 
     [Fact]

@@ -19,22 +19,14 @@ import {
 
 const { accounts, ledgerAccountId, history, historyError, showHistory } = useAtm()
 
-type Kind = 'Deposit' | 'Withdrawal' | 'TransferIn' | 'TransferOut'
-
-const TYPE_META: Record<Kind, { label: string; credit: boolean; badge: BadgeVariants['variant'] }> = {
+const TYPE_META: Record<Transaction['type'], { label: string; credit: boolean; badge: BadgeVariants['variant'] }> = {
   Deposit: { label: 'Deposit', credit: true, badge: 'secondary' },
   Withdrawal: { label: 'Withdrawal', credit: false, badge: 'outline' },
   TransferIn: { label: 'Transfer In', credit: true, badge: 'secondary' },
   TransferOut: { label: 'Transfer Out', credit: false, badge: 'outline' },
 }
 
-// A transfer is a Withdrawal/Deposit pair sharing a correlationId.
-function kindOf(t: Transaction): Kind {
-  if (t.correlationId === null) return t.type
-  return t.type === 'Deposit' ? 'TransferIn' : 'TransferOut'
-}
-
-const rows = computed(() => history.value.map((t) => ({ ...t, meta: TYPE_META[kindOf(t)] })))
+const rows = computed(() => history.value.map((t) => ({ ...t, meta: TYPE_META[t.type] })))
 
 const selected = computed({
   get: () => ledgerAccountId.value ?? undefined,
