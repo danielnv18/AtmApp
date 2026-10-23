@@ -2,9 +2,9 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RefreshCwIcon } from '@lucide/vue'
 import { useAtm } from '@/composables/useAtm'
-import { formatMoney } from '@/lib/money'
 import type { Operation } from '@/types'
 import ActionPanel from '@/components/ActionPanel.vue'
+import AnimatedMoney from '@/components/AnimatedMoney.vue'
 import LedgerTable from '@/components/LedgerTable.vue'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -46,7 +46,7 @@ onMounted(load)
         <h1 class="font-heading text-2xl font-semibold tracking-wide">ATM<span class="text-lime"> Trust</span></h1>
         <div v-if="accounts.length > 0" class="text-right">
           <p class="text-xs text-white/70">Total balance</p>
-          <p class="font-heading text-xl font-medium tabular-nums" data-testid="total">{{ formatMoney(total) }}</p>
+          <p class="font-heading text-xl font-medium"><AnimatedMoney :value="total" data-testid="total" /></p>
         </div>
       </div>
       <div class="bg-teal">

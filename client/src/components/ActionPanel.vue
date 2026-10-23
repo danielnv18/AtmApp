@@ -5,6 +5,7 @@ import { ApiError } from '@/api/atmClient'
 import { useAtm } from '@/composables/useAtm'
 import { formatMoney, parseAmount } from '@/lib/money'
 import type { Operation } from '@/types'
+import AnimatedMoney from './AnimatedMoney.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -66,6 +67,11 @@ const canReview = computed(
 
 function focusAmount() {
   void nextTick(() => amountField.value?.querySelector('input')?.focus())
+}
+
+// With out-in the form is not in the DOM until the previous step has left.
+function onEntered() {
+  if (step.value === 'edit') focusAmount()
 }
 
 function reset() {
@@ -148,7 +154,7 @@ function describeFailure(e: unknown): { title: string; detail?: string } {
           :aria-checked="a.id === accountId"
           data-testid="account-card"
           :data-account-name="a.name"
-          class="focus-visible:ring-ring/50 rounded-xl border p-3.5 text-left transition focus-visible:ring-3 focus-visible:outline-none"
+          class="focus-visible:ring-ring/50 rounded-xl border p-3.5 text-left transition duration-200 active:scale-[0.98] focus-visible:ring-3 focus-visible:outline-none"
           :class="a.id === accountId ? 'bg-teal border-teal text-white' : 'hover:bg-muted bg-card'"
           @click="selectAccount(a.id)"
         >
@@ -158,9 +164,7 @@ function describeFailure(e: unknown): { title: string; detail?: string } {
           >
             {{ a.name }}
           </span>
-          <span class="font-heading mt-1.5 block text-2xl font-medium tabular-nums" data-testid="balance">
-            {{ formatMoney(a.balance) }}
-          </span>
+          <AnimatedMoney :value="a.balance" class="font-heading mt-1.5 block text-2xl font-medium" data-testid="balance" />
         </button>
       </div>
 
@@ -179,8 +183,10 @@ function describeFailure(e: unknown): { title: string; detail?: string } {
         </Button>
       </div>
 
+      <Transition name="step" mode="out-in" @after-enter="onEntered">
+      <div :key="step" class="grid gap-5">
       <template v-if="step === 'edit'">
-        <Alert v-if="failure" variant="destructive">
+        <Alert v-if="failure" variant="destructive" class="animate-in fade-in slide-in-from-top-1 duration-200">
           <AlertTitle>{{ failure.title }}</AlertTitle>
           <AlertDescription v-if="failure.detail">{{ failure.detail }}</AlertDescription>
         </Alert>
@@ -293,7 +299,7 @@ function describeFailure(e: unknown): { title: string; detail?: string } {
       </div>
 
       <div v-else-if="step === 'done' && receipt" class="grid gap-4 text-center" role="status" data-testid="receipt">
-        <CircleCheckIcon class="text-lime-dark mx-auto size-10" />
+        <CircleCheckIcon class="pop text-lime-dark mx-auto size-10" />
         <div>
           <h3 class="font-heading text-xl font-medium">{{ receipt.title }}</h3>
           <p class="text-muted-foreground text-sm">{{ receipt.detail }}</p>
@@ -304,6 +310,8 @@ function describeFailure(e: unknown): { title: string; detail?: string } {
         </p>
         <Button class="rounded-full" @click="reset">Make another transaction</Button>
       </div>
+      </div>
+      </Transition>
     </CardContent>
   </Card>
 </template>

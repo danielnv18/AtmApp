@@ -62,7 +62,7 @@ const groups = computed(() => {
       </p>
       <section v-for="g in groups" :key="g.key">
         <h3 class="font-heading text-orange text-sm font-semibold tracking-wide uppercase">{{ g.label }}</h3>
-        <ul class="divide-y">
+        <TransitionGroup tag="ul" name="row" class="divide-y">
           <li v-for="t in g.rows" :key="t.id" class="flex items-center justify-between gap-3 py-2.5" data-testid="ledger-row">
             <div class="min-w-0">
               <p class="text-sm font-medium" data-testid="ledger-type">{{ t.meta.label }}</p>
@@ -84,7 +84,7 @@ const groups = computed(() => {
               </p>
             </div>
           </li>
-        </ul>
+        </TransitionGroup>
       </section>
     </CardContent>
   </Card>

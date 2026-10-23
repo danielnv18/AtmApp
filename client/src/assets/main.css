@@ -137,3 +137,51 @@
     @apply font-sans;
     }
 }
+
+/* Motion: transform and opacity only, short durations, ease-out when entering. */
+:root {
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --dur-fast: 150ms;
+    --dur-base: 220ms;
+}
+
+.step-enter-active {
+    transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
+}
+.step-leave-active {
+    transition: opacity var(--dur-fast) ease-in, transform var(--dur-fast) ease-in;
+}
+.step-enter-from {
+    opacity: 0;
+    transform: translateY(8px);
+}
+.step-leave-to {
+    opacity: 0;
+    transform: translateY(-4px);
+}
+
+/* Rows only animate in; leaving rows are removed at once so lists never double up. */
+.row-enter-active {
+    transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
+}
+.row-enter-from {
+    opacity: 0;
+    transform: translateY(-6px);
+}
+
+@keyframes pop {
+    0% { opacity: 0; transform: scale(0.5); }
+    60% { opacity: 1; transform: scale(1.12); }
+    100% { transform: scale(1); }
+}
+.pop {
+    animation: pop 380ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
