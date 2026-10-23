@@ -42,14 +42,20 @@ API tests, from the repository root:
 dotnet test AtmApp.slnx
 ```
 
-Browser check. With the API and the client running, from `client/`:
+Client unit and component tests, from `client/`:
+
+```sh
+npm run test:unit -- --run
+```
+
+End-to-end tests, from `client/`:
 
 ```sh
 npx playwright install chromium
-node scripts/verify-e2e.mjs
+npm run test:e2e
 ```
 
-The browser check withdraws $20 from Checking and saves a screenshot to `client/.verify/`.
+The end-to-end tests start their own API on port 5199 and client on port 5174. The API runs against a fresh temporary database, so the tests never change `api/atm.db`. Stop any API you started with `dotnet run` first. On Windows it locks the build output the tests need to rebuild. The `full-stack` project drives the real API. The `mocked` project fakes the API to reproduce failures such as outages and conflicts.
 
 ## Reset the data
 
