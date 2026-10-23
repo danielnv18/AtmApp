@@ -12,7 +12,7 @@
 Clone the repository:
 
 ```sh
-git clone <repository-url> AtmApp
+git clone https://github.com/danielnv18/AtmApp.git AtmApp
 cd AtmApp
 ```
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using AtmApp.Api.Domain;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -14,7 +15,7 @@ public sealed class AtmExceptionHandler(IProblemDetailsService problemDetails, I
         {
             DomainException { Error: DomainError.InvalidAmount } =>
                 (StatusCodes.Status400BadRequest, "Invalid amount",
-                    "Amount must be greater than 0, at most 1,000,000,000.00, and have at most 2 decimal places."),
+                    $"Amount must be greater than 0, at most {Money.MaxValue.ToString("N2", CultureInfo.InvariantCulture)}, and have at most 2 decimal places."),
             DomainException { Error: DomainError.SameAccountTransfer } =>
                 (StatusCodes.Status400BadRequest, "Same account transfer", "Source and destination accounts must differ."),
             DomainException { Error: DomainError.AccountNotFound } =>
