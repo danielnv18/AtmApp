@@ -22,7 +22,7 @@ public static class DatabaseInitializer
         var now = clock.GetUtcNow();
         foreach (var (name, opening) in new[] { ("Checking", 1000.00m), ("Savings", 500.00m) })
         {
-            // Open at zero and Credit the opening amount so the balance is backed by a ledger row.
+            // Open at zero and Deposit the opening amount so the balance is backed by a ledger row.
             var account = Account.Open(name);
             var ledgerRow = account.Deposit(Money.Parse(opening), now, description: OpeningDescription);
             db.Accounts.Add(account);

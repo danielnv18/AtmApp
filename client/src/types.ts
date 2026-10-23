@@ -15,7 +15,7 @@ export type Transaction = {
 
 export type HistoryPage = { items: Transaction[]; nextCursor: string | null }
 
-export type TransferReceipt = { correlationId: string; withdrawal: Transaction; deposit: Transaction }
+export type TransferReceipt = { correlationId: string; transferOut: Transaction; transferIn: Transaction }
 
 export type ProblemDetails = { type?: string; title?: string; status?: number; detail?: string }
 

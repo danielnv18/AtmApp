@@ -19,4 +19,4 @@ public sealed record HistoryCursor(long Sequence)
 
 public sealed record HistoryPage(IReadOnlyList<Transaction> Items, HistoryCursor? Next);
 
-public sealed record TransferReceipt(Guid CorrelationId, Transaction Withdrawal, Transaction Deposit);
+public sealed record TransferReceipt(Guid CorrelationId, Transaction TransferOut, Transaction TransferIn);

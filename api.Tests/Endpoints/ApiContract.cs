@@ -19,7 +19,7 @@ public sealed record LedgerRowView(
 
 public sealed record HistoryView(IReadOnlyList<LedgerRowView> Items, string? NextCursor);
 
-public sealed record TransferView(Guid CorrelationId, LedgerRowView Withdrawal, LedgerRowView Deposit);
+public sealed record TransferView(Guid CorrelationId, LedgerRowView TransferOut, LedgerRowView TransferIn);
 
 public sealed record ProblemView(int Status, string Title, string Detail);
 

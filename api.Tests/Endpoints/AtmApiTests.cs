@@ -103,9 +103,9 @@ public sealed class AtmApiTests : IAsyncLifetime
         var accounts = await _client.GetAsync<AccountView[]>("/api/atm/accounts");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(("TransferOut", "TransferIn"), (receipt.Withdrawal.Type, receipt.Deposit.Type));
-        Assert.Equal(receipt.CorrelationId, receipt.Withdrawal.CorrelationId);
-        Assert.Equal(receipt.CorrelationId, receipt.Deposit.CorrelationId);
+        Assert.Equal(("TransferOut", "TransferIn"), (receipt.TransferOut.Type, receipt.TransferIn.Type));
+        Assert.Equal(receipt.CorrelationId, receipt.TransferOut.CorrelationId);
+        Assert.Equal(receipt.CorrelationId, receipt.TransferIn.CorrelationId);
         Assert.Equal([900m, 600m], accounts.Select(a => a.Balance));
     }
 

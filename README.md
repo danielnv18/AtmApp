@@ -1,6 +1,6 @@
 # AtmApp
 
-.NET 10 minimal API (`api/`) + Vue 3 client (`client/`).
+.NET 10 minimal API (`api/`) and Vue 3 client (`client/`) for a two-account ATM: deposit, withdraw, transfer and view history. Data lives in SQLite.
 
 ## Prerequisites
 
@@ -9,20 +9,18 @@
 
 ## Run the app
 
-Clone the repository:
-
 ```sh
 git clone https://github.com/danielnv18/AtmApp.git AtmApp
 cd AtmApp
 ```
 
-Start the API in one terminal, from the repository root. It listens on http://localhost:5000. On first start it creates the database `api/atm.db` and seeds Checking with $1,000.00 and Savings with $500.00.
+Start the API from the repository root. It listens on http://localhost:5000. On first start it creates `api/atm.db` and seeds Checking with $1,000.00 and Savings with $500.00.
 
 ```sh
 dotnet run --project api
 ```
 
-Start the client in a second terminal, also from the repository root:
+Start the client in a second terminal.
 
 ```sh
 cd client
@@ -30,9 +28,9 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The client sends `/api` requests to the API, so keep both terminals running.
+Open http://localhost:5173. The client proxies `/api` to the API, so keep both running. Swagger UI is at http://localhost:5000/swagger.
 
-Press `Ctrl+C` in each terminal to stop.
+To reset the data, stop the API and delete `api/atm.db`.
 
 ## Run the tests
 
@@ -55,47 +53,39 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The end-to-end tests start their own API on port 5199 and client on port 5174. The API runs against a fresh temporary database, so the tests never change `api/atm.db`. Stop any API you started with `dotnet run` first. On Windows it locks the build output the tests need to rebuild. The `full-stack` project drives the real API. The `mocked` project fakes the API to reproduce failures such as outages and conflicts.
+The end-to-end tests start their own API (port 5199) and client (port 5174) on a temporary database, so they never touch `api/atm.db`. Stop any API started with `dotnet run` first, because on Windows it locks the build output. The `full-stack` project uses the real API. The `mocked` project fakes it to reproduce outages and conflicts.
 
-## Reset the data
+## Design
 
-Stop the API and delete `api/atm.db`. The next start recreates it with the opening balances. Do this after pulling schema changes, such as the `TransferIn` and `TransferOut` ledger types.
+- **Layers.** `Domain` holds `Money`, `Account` and `Transaction` and enforces the rules. `Application` has `AccountService`, which saves each operation in one database transaction. `Endpoints` maps HTTP to the service and errors to `application/problem+json`. `Infrastructure` is EF Core on SQLite.
+- **Ledger.** Every balance change is an append-only row with a per-account sequence and the resulting `BalanceAfter`. Types are `Deposit`, `Withdrawal`, `TransferIn` and `TransferOut`. A transfer is a `TransferOut` and a `TransferIn` row sharing a `correlationId`, saved atomically.
+- **Money.** Amounts are positive, at most 1,000,000,000.00, with at most 2 decimal places. SQLite stores them as integer cents, because it has no decimal type.
+- **Rules in the database too.** CHECK constraints and triggers (append-only, gapless balance chain) back up the domain checks. A trigger failure is a `500` on purpose, because it means a bug.
+- **History paging.** `GET /api/atm/accounts/{id}/history` takes `limit` and an opaque `cursor`.
 
 ## API errors
-
-Errors are `application/problem+json` with `status`, `title`, and `detail`.
 
 | Status | Cause                                                                          |
 | ------ | ------------------------------------------------------------------------------ |
 | 400    | Invalid amount, same-account transfer, malformed body, or bad `limit`/`cursor` |
 | 404    | Unknown account                                                                |
-| 409    | Concurrent update. Retry.                                                      |
+| 409    | Concurrent update. The caller retries.                                         |
 | 422    | Insufficient funds                                                             |
 | 500    | Unexpected failure. No internal details.                                       |
 
-The Swagger UI is at http://localhost:5000/swagger while the API runs.
-
 ## Known limitations
 
-What the code does not do, so nobody assumes it does.
+**Concurrency.**
 
-**Concurrency.** Concurrent writes to one account are detected, not resolved.
-
-- A stale write fails with `409` through the `LastSequence` concurrency token, and nothing retries it. The caller must retry.
-- There are no idempotency keys. If a response is lost and the client replays a `POST`, the money moves twice.
-- SQLite runs with `journal_mode = DELETE` and a 5 second timeout, to keep a single database file. A write that waits longer fails with `SQLITE_BUSY`, which surfaces as a `500`, not a `409` or `503`. No test covers it.
-- A database trigger failure (broken ledger chain, update or delete of a ledger row) also surfaces as a `500`. That is intended, because it means a bug.
-- Saving two new ledger rows for the same account in one `SaveChanges` is unsafe. EF orders inserts by key, so the chain trigger can see them out of sequence. Each operation saves at most one row per account.
+- A stale write returns `409` (optimistic `LastSequence` token) and nothing retries it.
+- There are no idempotency keys, so a replayed `POST` after a lost response moves the money twice.
+- SQLite uses `journal_mode = DELETE` and a 5 second timeout. A longer wait fails with `SQLITE_BUSY`, which surfaces as a `500`. No test covers it.
+- Save at most one new ledger row per account per `SaveChanges`. EF orders inserts by key, so the chain trigger could see two rows out of order.
 
 **Product.**
 
-- One currency, and no account creation, authentication or overdraft.
-- No cap on an account balance. Only a single amount is capped.
-- Account names are not unique, and nothing enforces that exactly two accounts exist.
-- The client loads only the first page of history, though the API supports `limit` and `cursor`.
+- One currency. No authentication, account creation or overdraft.
+- Nothing enforces exactly two accounts or unique account names, and an account balance has no cap.
+- The client loads only the first page of history.
 
-**Operations.**
-
-- No production build story. The client relies on the Vite dev proxy, and the API has no CORS or static hosting.
-- No CI, Docker image or health check endpoint.
-- The OpenAPI document has no `Produces` metadata.
+**Operations.** No production build (the client relies on the Vite proxy; the API has no CORS or static hosting), no CI, Docker image or health endpoint, and the OpenAPI document has no `Produces` metadata.

@@ -59,8 +59,8 @@ public static class AtmEndpoints
             var receipt = await service.TransferAsync(body.FromAccountId, body.ToAccountId, amount, ct);
             return new TransferResponse(
                 receipt.CorrelationId,
-                TransactionResponse.From(receipt.Withdrawal),
-                TransactionResponse.From(receipt.Deposit));
+                TransactionResponse.From(receipt.TransferOut),
+                TransactionResponse.From(receipt.TransferIn));
         });
 
         return routes;

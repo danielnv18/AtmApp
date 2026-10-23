@@ -74,7 +74,7 @@ const withdraw = (accountId: string, amount: number) =>
 const transfer = (fromAccountId: string, toAccountId: string, amount: number) =>
   run('transfer', async () => {
     const receipt = await atmClient.transfer(fromAccountId, toAccountId, amount)
-    return [receipt.withdrawal, receipt.deposit]
+    return [receipt.transferOut, receipt.transferIn]
   })
 
 export function useAtm() {

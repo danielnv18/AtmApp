@@ -125,8 +125,8 @@ export class FakeAtm {
         const correlationId = randomUUID()
         return {
           correlationId,
-          withdrawal: this.debit(from, cents, correlationId, `Transfer to ${to.name}`),
-          deposit: this.credit(to, cents, correlationId, `Transfer from ${from.name}`),
+          transferOut: this.debit(from, cents, correlationId, `Transfer to ${to.name}`),
+          transferIn: this.credit(to, cents, correlationId, `Transfer from ${from.name}`),
         }
       },
     },

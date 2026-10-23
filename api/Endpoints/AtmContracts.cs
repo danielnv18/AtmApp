@@ -27,4 +27,4 @@ public sealed record TransactionResponse(
 
 public sealed record HistoryResponse(IReadOnlyList<TransactionResponse> Items, string? NextCursor);
 
-public sealed record TransferResponse(Guid CorrelationId, TransactionResponse Withdrawal, TransactionResponse Deposit);
+public sealed record TransferResponse(Guid CorrelationId, TransactionResponse TransferOut, TransactionResponse TransferIn);
