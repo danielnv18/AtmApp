@@ -3,7 +3,7 @@ import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { ArrowDownUpIcon, CircleCheckIcon, Loader2Icon } from '@lucide/vue'
 import { ApiError } from '@/api/atmClient'
 import { useAtm } from '@/composables/useAtm'
-import { formatMoney, parseAmount } from '@/lib/money'
+import { addMoney, formatMoney, parseAmount, subtractMoney, toCents } from '@/lib/money'
 import type { Operation } from '@/types'
 import AnimatedMoney from './AnimatedMoney.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -46,14 +46,16 @@ const problem = computed(() => {
   if (amount.value.trim() === '') return null
   if (value === null) return 'Enter an amount greater than zero, such as 25.00.'
   const available = from.value?.balance ?? 0
-  if (debits.value && value > available) return `That is ${formatMoney(value - available)} more than is available.`
+  if (debits.value && toCents(value) > toCents(available)) {
+    return `That is ${formatMoney(subtractMoney(value, available))} more than is available.`
+  }
   return null
 })
 
 const projected = computed(() => {
   const value = parsed.value
   if (value === null || problem.value !== null || from.value === undefined) return null
-  return from.value.balance + (debits.value ? -value : value)
+  return debits.value ? subtractMoney(from.value.balance, value) : addMoney(from.value.balance, value)
 })
 
 const canReview = computed(

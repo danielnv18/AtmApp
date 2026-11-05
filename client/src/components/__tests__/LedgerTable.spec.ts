@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { account, ledgerRow } from '@/__tests__/fixtures'
 import type { Transaction } from '@/types'
@@ -90,5 +90,43 @@ describe('LedgerTable', () => {
     const w = await mountLedger([ledgerRow()])
 
     expect(w.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  describe('day grouping', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-06-15T12:00:00'))
+    })
+    afterEach(() => vi.useRealTimers())
+
+    const headings = (w: VueWrapper) => w.findAll('h3').map((h) => h.text())
+
+    test('labels today, yesterday and older days, newest first', async () => {
+      const w = await mountLedger([
+        ledgerRow({ timestampUtc: '2026-06-15T10:00:00' }),
+        ledgerRow({ timestampUtc: '2026-06-15T09:00:00' }),
+        ledgerRow({ timestampUtc: '2026-06-14T10:00:00' }),
+        ledgerRow({ timestampUtc: '2026-06-01T10:00:00' }),
+      ])
+
+      expect(headings(w)).toEqual(['Today', 'Yesterday', 'Jun 1, 2026'])
+      const sections = w.findAll('section')
+      expect(sections.map((s) => s.findAll('[data-testid="ledger-row"]').length)).toEqual([2, 1, 1])
+    })
+
+    test('"Yesterday" still works across a month boundary', async () => {
+      vi.setSystemTime(new Date('2026-07-01T12:00:00'))
+      const w = await mountLedger([ledgerRow({ timestampUtc: '2026-06-30T10:00:00' })])
+
+      expect(headings(w)).toEqual(['Yesterday'])
+    })
+  })
+
+  test('floating point noise in amounts never leaks into the display', async () => {
+    const w = await mountLedger([
+      ledgerRow({ accountId: 'chk', type: 'Deposit', amount: 0.1 + 0.2, balanceAfter: 100.1 + 200.2 }),
+    ])
+
+    expect(rowCells(w)).toEqual([{ type: 'Deposit', amount: '+$0.30', balance: '$300.30' }])
   })
 })
