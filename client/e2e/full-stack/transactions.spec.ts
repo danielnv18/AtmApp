@@ -1,8 +1,52 @@
 import { randomUUID } from 'node:crypto'
+import type { Page } from '@playwright/test'
+import type { Account, HistoryPage, Transaction } from '../../src/types'
 import { expect, money, test } from '../support/test'
 
 test.beforeEach(async ({ atm }) => {
   await atm.open()
+})
+
+/** Newest-first ledger rows for Checking, read from the server rather than the page. */
+async function checkingLedger(page: Page, limit: number) {
+  const accounts: Account[] = await (await page.request.get('/api/atm/accounts')).json()
+  const checking = accounts.find((a) => a.name === 'Checking')!
+  const history: HistoryPage = await (await page.request.get(`/api/atm/accounts/${checking.id}/history?limit=${limit}`)).json()
+  return history.items
+}
+
+test('a deposit whose response was lost is applied once when the user confirms it again', async ({ atm, page }) => {
+  const start = await atm.balances()
+  const [previousTop] = await checkingLedger(page, 1)
+  let committed: Transaction | undefined
+  await page.route(
+    '**/api/atm/deposit',
+    async (route) => {
+      committed = await (await route.fetch()).json()
+      await route.abort('internetdisconnected')
+    },
+    { times: 1 },
+  )
+
+  await atm.deposit('Checking', '41.17')
+
+  await expect(atm.alert('Could not reach the server'), 'the page never saw the response').toBeVisible()
+  expect(money(committed!.balanceAfter), 'the server applied the first request').toBe(money(start.Checking + 41.17))
+
+  await atm.review('Deposit')
+  await atm.confirm()
+
+  await expect(atm.receipt).toContainText('$41.17 deposited to Checking')
+  await expect(atm.balanceLabel('Checking'), 'Checking rose once').toHaveText(money(start.Checking + 41.17))
+  const ledger = await checkingLedger(page, 2)
+  expect(ledger.map((t) => t.id), 'one new ledger row, the one the lost request wrote').toEqual([
+    committed!.id,
+    previousTop!.id,
+  ])
+  await expect(atm.ledgerRow(0).amount).toHaveText('+$41.17')
+  await expect(atm.ledgerRow(1).balance, 'the next row down is the balance before the deposit').toHaveText(
+    money(start.Checking),
+  )
 })
 
 test('deposit credits the card and tops the activity list', async ({ atm }) => {
