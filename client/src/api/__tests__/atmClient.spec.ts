@@ -28,6 +28,7 @@ function lastCall() {
     url,
     method: init?.method ?? 'GET',
     contentType: new Headers(init?.headers).get('Content-Type'),
+    idempotencyKey: new Headers(init?.headers).get('Idempotency-Key'),
     body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
   }
 }
@@ -38,7 +39,7 @@ describe('reads', () => {
     fetchMock.mockResolvedValue(json(accounts))
 
     await expect(atmClient.getAccounts()).resolves.toEqual(accounts)
-    expect(lastCall()).toMatchObject({ url: '/api/atm/accounts', method: 'GET', body: undefined })
+    expect(lastCall()).toMatchObject({ url: '/api/atm/accounts', method: 'GET', idempotencyKey: null, body: undefined })
   })
 
   test('getHistory GETs the account history with the default limit of 50', async () => {
@@ -65,40 +66,43 @@ describe('reads', () => {
 })
 
 describe('writes', () => {
-  test('deposit POSTs { accountId, amount } as JSON', async () => {
+  test('deposit POSTs { accountId, amount } as JSON with the idempotency key', async () => {
     const tx = ledgerRow({ accountId: 'a1', amount: 25 })
     fetchMock.mockResolvedValue(json(tx))
 
-    await expect(atmClient.deposit('a1', 25)).resolves.toEqual(tx)
+    await expect(atmClient.deposit('a1', 25, 'key-1')).resolves.toEqual(tx)
     expect(lastCall()).toEqual({
       url: '/api/atm/deposit',
       method: 'POST',
       contentType: 'application/json',
+      idempotencyKey: 'key-1',
       body: { accountId: 'a1', amount: 25 },
     })
   })
 
-  test('withdraw POSTs { accountId, amount } as JSON', async () => {
+  test('withdraw POSTs { accountId, amount } as JSON with the idempotency key', async () => {
     fetchMock.mockResolvedValue(json(ledgerRow({ type: 'Withdrawal' })))
 
-    await atmClient.withdraw('a1', 20)
+    await atmClient.withdraw('a1', 20, 'key-2')
     expect(lastCall()).toEqual({
       url: '/api/atm/withdraw',
       method: 'POST',
       contentType: 'application/json',
+      idempotencyKey: 'key-2',
       body: { accountId: 'a1', amount: 20 },
     })
   })
 
-  test('transfer POSTs { fromAccountId, toAccountId, amount } as JSON', async () => {
+  test('transfer POSTs { fromAccountId, toAccountId, amount } as JSON with the idempotency key', async () => {
     const receipt = transferReceipt({ accountId: 'a1', balanceAfter: 90 }, { accountId: 'a2', balanceAfter: 60 }, 10)
     fetchMock.mockResolvedValue(json(receipt))
 
-    await expect(atmClient.transfer('a1', 'a2', 10)).resolves.toEqual(receipt)
+    await expect(atmClient.transfer('a1', 'a2', 10, 'key-3')).resolves.toEqual(receipt)
     expect(lastCall()).toEqual({
       url: '/api/atm/transfer',
       method: 'POST',
       contentType: 'application/json',
+      idempotencyKey: 'key-3',
       body: { fromAccountId: 'a1', toAccountId: 'a2', amount: 10 },
     })
   })
@@ -114,7 +118,7 @@ describe('errors', () => {
   ])('a %d problem+json becomes an ApiError with status, title and detail', async (status, title, detail) => {
     fetchMock.mockResolvedValue(problem(status, 'Status Text', { title, detail }))
 
-    const error = await atmClient.withdraw('a1', 20).catch((e: unknown) => e)
+    const error = await atmClient.withdraw('a1', 20, 'key-1').catch((e: unknown) => e)
     expect(error).toBeInstanceOf(ApiError)
     expect(error).toMatchObject({ status, title, detail, message: detail })
   })

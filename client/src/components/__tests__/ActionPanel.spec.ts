@@ -165,7 +165,7 @@ describe('deposit and withdraw', () => {
 
     await confirm()
 
-    expect(api.deposit).toHaveBeenCalledWith('chk', 1234.5)
+    expect(api.deposit).toHaveBeenCalledWith('chk', 1234.5, expect.any(String))
     const receipt = panel.get('[data-testid="receipt"]').text()
     expect(receipt).toContain('Deposit complete')
     expect(receipt).toContain('$1,234.50 deposited to Checking')
@@ -180,7 +180,7 @@ describe('deposit and withdraw', () => {
 
     await confirm()
 
-    expect(api.withdraw).toHaveBeenCalledWith('sav', 50)
+    expect(api.withdraw).toHaveBeenCalledWith('sav', 50, expect.any(String))
     expect(panel.get('[data-testid="receipt"]').text()).toContain('$50.00 withdrawn from Savings')
   })
 
@@ -249,7 +249,7 @@ describe('transfer', () => {
 
     await confirm()
 
-    expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75)
+    expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75, expect.any(String))
     expect(panel.get('[data-testid="receipt"]').text()).toContain('$75.00 moved from Checking to Savings')
   })
 })
@@ -344,7 +344,7 @@ describe('floating point handling', () => {
     await review()
     await confirm()
 
-    expect(api.deposit).toHaveBeenCalledWith('chk', 0.07)
+    expect(api.deposit).toHaveBeenCalledWith('chk', 0.07, expect.any(String))
   })
 })
 
@@ -423,7 +423,95 @@ describe('gaps', () => {
     await confirm()
 
     expect(panel.get('[role="alert"]').text()).toContain('Insufficient funds')
-    expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75)
+    expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75, expect.any(String))
+  })
+})
+
+describe('idempotency key', () => {
+  const keysSent = (call: { mock: { calls: unknown[][] } }) => call.mock.calls.map((args) => args.at(-1))
+  const lostResponse = () => new TypeError('Failed to fetch')
+
+  test('confirming the same deposit again after a failure resends the same key', async () => {
+    const { api, enter, review, confirm, panel } = await mountPanel('deposit')
+    api.deposit.mockRejectedValueOnce(lostResponse()).mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+    expect(panel.get('[role="alert"]').text()).toContain('Could not reach the server')
+
+    await review()
+    await confirm()
+
+    const [first, retry] = keysSent(api.deposit)
+    expect(first).toEqual(expect.any(String))
+    expect(retry).toBe(first)
+    expect(panel.get('[data-testid="receipt"]').text()).toContain('Deposit complete')
+  })
+
+  test('a retried transfer resends the same key', async () => {
+    const { api, enter, review, confirm } = await mountPanel('transfer', 'chk')
+    api.transfer.mockRejectedValueOnce(lostResponse()).mockResolvedValue(
+      transferReceipt({ accountId: 'chk', balanceAfter: 25 }, { accountId: 'sav', balanceAfter: 575 }, 75),
+    )
+    await enter('75')
+    await review()
+    await confirm()
+    await review()
+    await confirm()
+
+    const [first, retry] = keysSent(api.transfer)
+    expect(retry).toBe(first)
+  })
+
+  test('changing the amount after a failure sends a new key', async () => {
+    const { api, enter, review, confirm } = await mountPanel('deposit')
+    api.deposit.mockRejectedValueOnce(lostResponse()).mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 125 }))
+    await enter('20')
+    await review()
+    await confirm()
+
+    await enter('25')
+    await review()
+    await confirm()
+
+    expect(api.deposit.mock.calls.map(([, amount]) => amount)).toEqual([20, 25])
+    const [first, second] = keysSent(api.deposit)
+    expect(second).not.toBe(first)
+  })
+
+  test('the same deposit after a success sends a new key', async () => {
+    const { api, enter, review, confirm, button } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+    await button('Make another transaction')!.trigger('click')
+    await flushPromises()
+
+    await enter('20')
+    await review()
+    await confirm()
+
+    const [first, second] = keysSent(api.deposit)
+    expect(second).not.toBe(first)
+  })
+
+  test('leaving the tab after a failure and coming back to the same deposit keeps the key', async () => {
+    const { api, enter, review, confirm, panel } = await mountPanel('deposit')
+    api.deposit.mockRejectedValueOnce(lostResponse()).mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+
+    await panel.setProps({ tab: 'withdraw' })
+    await panel.setProps({ tab: 'deposit' })
+    await flushPromises()
+    await enter('20')
+    await review()
+    await confirm()
+
+    const [first, retry] = keysSent(api.deposit)
+    expect(retry).toBe(first)
   })
 })
 
@@ -455,6 +543,6 @@ describe('decimal places', () => {
     await review()
     await confirm()
 
-    expect(api.deposit).toHaveBeenCalledWith('chk', 0.03)
+    expect(api.deposit).toHaveBeenCalledWith('chk', 0.03, expect.any(String))
   })
 })

@@ -40,6 +40,16 @@ const PROBLEMS = {
     title: 'Insufficient funds',
     detail: 'The account balance is too low for this operation.',
   },
+  invalidKey: {
+    status: 400,
+    title: 'Invalid idempotency key',
+    detail: 'Send an Idempotency-Key header of 1 to 100 characters, such as a new UUID for each operation.',
+  },
+  keyReused: {
+    status: 422,
+    title: 'Idempotency key reused',
+    detail: 'This Idempotency-Key was already used for a different request. Send a new key for a new operation.',
+  },
 } satisfies Record<string, Problem>
 
 type FakeAccount = { id: string; name: AccountName; cents: number; sequence: number }
@@ -56,11 +66,12 @@ function toCents(amount: unknown): number {
 /**
  * In-memory stand-in for the ATM API with the same wire contract: balanceAfter on every
  * ledger row, a shared correlationId on both legs of a transfer, newest-first history,
- * and problem+json errors.
+ * an Idempotency-Key on every write, and problem+json errors.
  */
 export class FakeAtm {
   private readonly accounts = new Map<string, FakeAccount>()
   private readonly ledger: (Transaction & { sequence: number })[] = []
+  private readonly completed = new Map<string, { request: string; json: unknown }>()
   private readonly faults: Record<Endpoint, Fault[]> = {
     accounts: [],
     history: [],
@@ -189,10 +200,21 @@ export class FakeAtm {
     if (fault !== undefined && 'until' in fault) await fault.until
     else if (fault !== undefined) return fulfillProblem(route, fault)
 
+    const signature = `${entry.endpoint} ${request.postData()}`
+    let key: string | undefined
+    if (entry.method === 'POST') {
+      key = request.headers()['idempotency-key']?.trim()
+      if (!key || key.length > 100) return fulfillProblem(route, PROBLEMS.invalidKey)
+      const earlier = this.completed.get(key)
+      if (earlier !== undefined && earlier.request !== signature) return fulfillProblem(route, PROBLEMS.keyReused)
+      if (earlier !== undefined) return route.fulfill({ status: 200, json: earlier.json })
+    }
+
     try {
       const params = url.pathname.match(entry.path)?.slice(1) ?? []
       const body = (request.postDataJSON() ?? {}) as Body
       const json = entry.handle({ params, query: url.searchParams, body })
+      if (key !== undefined) this.completed.set(key, { request: signature, json })
       await route.fulfill({ status: 200, json })
     } catch (e) {
       if (!(e instanceof ProblemError)) throw e

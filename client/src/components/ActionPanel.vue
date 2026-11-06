@@ -110,6 +110,18 @@ function review() {
   step.value = 'review'
 }
 
+// A failed confirm may still have reached the server (the response can be lost on the way
+// back), so confirming the same request again reuses its idempotency key and the server
+// replays the first result. Only a success ends the attempt. A tab or account change does
+// not, because coming back to the same request is still a retry.
+let attempt: { request: string; key: string } | null = null
+
+function keyFor(...request: (string | number)[]) {
+  const text = request.join(' ')
+  if (attempt?.request !== text) attempt = { request: text, key: crypto.randomUUID() }
+  return attempt.key
+}
+
 async function execute() {
   const value = parsed.value
   const source = from.value
@@ -117,17 +129,18 @@ async function execute() {
   try {
     let detail: string
     if (tab.value === 'deposit') {
-      await deposit(source.id, value)
+      await deposit(source.id, value, keyFor('deposit', source.id, value))
       detail = `${formatMoney(value)} deposited to ${source.name}`
     } else if (tab.value === 'withdraw') {
-      await withdraw(source.id, value)
+      await withdraw(source.id, value, keyFor('withdraw', source.id, value))
       detail = `${formatMoney(value)} withdrawn from ${source.name}`
     } else {
       const target = to.value
       if (target === undefined) return
-      await transfer(source.id, target.id, value)
+      await transfer(source.id, target.id, value, keyFor('transfer', source.id, target.id, value))
       detail = `${formatMoney(value)} moved from ${source.name} to ${target.name}`
     }
+    attempt = null
     const balance = accounts.value.find((a) => a.id === source.id)?.balance ?? 0
     receipt.value = { title: `${meta.value.noun} complete`, detail, accountName: source.name, balance }
     step.value = 'done'

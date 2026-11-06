@@ -105,13 +105,13 @@ async function run(operation: Operation, call: () => Promise<Transaction[]>) {
   }
 }
 
-const deposit = (accountId: string, amount: number) =>
-  run('deposit', async () => [await atmClient.deposit(accountId, amount)])
-const withdraw = (accountId: string, amount: number) =>
-  run('withdraw', async () => [await atmClient.withdraw(accountId, amount)])
-const transfer = (fromAccountId: string, toAccountId: string, amount: number) =>
+const deposit = (accountId: string, amount: number, idempotencyKey: string) =>
+  run('deposit', async () => [await atmClient.deposit(accountId, amount, idempotencyKey)])
+const withdraw = (accountId: string, amount: number, idempotencyKey: string) =>
+  run('withdraw', async () => [await atmClient.withdraw(accountId, amount, idempotencyKey)])
+const transfer = (fromAccountId: string, toAccountId: string, amount: number, idempotencyKey: string) =>
   run('transfer', async () => {
-    const receipt = await atmClient.transfer(fromAccountId, toAccountId, amount)
+    const receipt = await atmClient.transfer(fromAccountId, toAccountId, amount, idempotencyKey)
     return [receipt.transferOut, receipt.transferIn]
   })
 

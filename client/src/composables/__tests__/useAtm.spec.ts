@@ -123,9 +123,9 @@ describe('operations', () => {
     api.deposit.mockResolvedValue(row)
     api.getHistory.mockResolvedValue(page(row))
 
-    await atm.deposit('chk', 25)
+    await atm.deposit('chk', 25, 'key-1')
 
-    expect(api.deposit).toHaveBeenCalledWith('chk', 25)
+    expect(api.deposit).toHaveBeenCalledWith('chk', 25, 'key-1')
     expect(atm.accounts.value.map((a) => [a.id, a.balance])).toEqual([
       ['chk', 125],
       ['sav', 500],
@@ -137,9 +137,9 @@ describe('operations', () => {
     const { api, atm } = await loaded()
     api.withdraw.mockResolvedValue(ledgerRow({ accountId: 'sav', type: 'Withdrawal', amount: 20, balanceAfter: 480 }))
 
-    await atm.withdraw('sav', 20)
+    await atm.withdraw('sav', 20, 'key-2')
 
-    expect(api.withdraw).toHaveBeenCalledWith('sav', 20)
+    expect(api.withdraw).toHaveBeenCalledWith('sav', 20, 'key-2')
     expect(atm.accounts.value.map((a) => [a.id, a.balance])).toEqual([
       ['chk', 100],
       ['sav', 480],
@@ -152,9 +152,9 @@ describe('operations', () => {
       transferReceipt({ accountId: 'sav', balanceAfter: 400 }, { accountId: 'chk', balanceAfter: 200 }, 100),
     )
 
-    await atm.transfer('sav', 'chk', 100)
+    await atm.transfer('sav', 'chk', 100, 'key-3')
 
-    expect(api.transfer).toHaveBeenCalledWith('sav', 'chk', 100)
+    expect(api.transfer).toHaveBeenCalledWith('sav', 'chk', 100, 'key-3')
     expect(atm.accounts.value.map((a) => [a.id, a.balance])).toEqual([
       ['chk', 200],
       ['sav', 400],
@@ -166,7 +166,7 @@ describe('operations', () => {
     const call = deferred<ReturnType<typeof ledgerRow>>()
     api.withdraw.mockReturnValue(call.promise)
 
-    const op = atm.withdraw('chk', 20)
+    const op = atm.withdraw('chk', 20, 'key-1')
     expect(atm.pending.value).toBe('withdraw')
 
     call.resolve(ledgerRow({ accountId: 'chk', balanceAfter: 80 }))
@@ -180,7 +180,7 @@ describe('operations', () => {
     const call = deferred<never>()
     api.transfer.mockReturnValue(call.promise)
 
-    const op = atm.transfer('chk', 'sav', 1000)
+    const op = atm.transfer('chk', 'sav', 1000, 'key-1')
     expect(atm.pending.value).toBe('transfer')
     call.reject(failure)
 
@@ -280,7 +280,7 @@ describe('paging', () => {
     expect(atm.page.value).toBe(2)
     api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 110 }))
 
-    await atm.deposit('chk', 10)
+    await atm.deposit('chk', 10, 'key-1')
 
     expect(atm.page.value).toBe(1)
     expect(api.getHistory).toHaveBeenLastCalledWith('chk', 10, null)

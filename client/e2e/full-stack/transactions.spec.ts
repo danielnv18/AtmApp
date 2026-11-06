@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { expect, money, test } from '../support/test'
 
 test.beforeEach(async ({ atm }) => {
@@ -146,7 +147,10 @@ test('activity is paged ten at a time and a new deposit returns to the newest pa
   const accounts: { id: string; name: string }[] = await (await page.request.get('/api/atm/accounts')).json()
   const checking = accounts.find((a) => a.name === 'Checking')!
   for (let i = 0; i < 12; i++) {
-    await page.request.post('/api/atm/deposit', { data: { accountId: checking.id, amount: 1 } })
+    await page.request.post('/api/atm/deposit', {
+      headers: { 'Idempotency-Key': randomUUID() },
+      data: { accountId: checking.id, amount: 1 },
+    })
   }
   await atm.open()
 
