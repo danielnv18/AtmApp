@@ -23,6 +23,9 @@ public sealed class AtmExceptionHandler(IProblemDetailsService problemDetails, I
                 (StatusCodes.Status404NotFound, "Account not found", "No account exists with the given id."),
             DomainException { Error: DomainError.InsufficientFunds } =>
                 (StatusCodes.Status422UnprocessableEntity, "Insufficient funds", "The account balance is too low for this operation."),
+            IdempotencyKeyReusedException =>
+                (StatusCodes.Status422UnprocessableEntity, "Idempotency key reused",
+                    "This Idempotency-Key was already used for a different request. Send a new key for a new operation."),
             DbUpdateConcurrencyException =>
                 (StatusCodes.Status409Conflict, "Concurrent update",
                     "The account was changed by another request. Reload and try again."),

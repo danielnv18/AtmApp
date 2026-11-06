@@ -11,9 +11,10 @@ Accept: application/json
 GET {{host}}/api/atm/accounts/{{accountId}}/history?limit=50
 Accept: application/json
 
-### Deposit
+### Deposit. Swap {{$guid}} for a fixed key and send twice to see the replay.
 POST {{host}}/api/atm/deposit
 Content-Type: application/json
+Idempotency-Key: {{$guid}}
 
 {
   "accountId": "{{accountId}}",
@@ -23,6 +24,7 @@ Content-Type: application/json
 ### Withdraw
 POST {{host}}/api/atm/withdraw
 Content-Type: application/json
+Idempotency-Key: {{$guid}}
 
 {
   "accountId": "{{accountId}}",
@@ -32,6 +34,7 @@ Content-Type: application/json
 ### Transfer
 POST {{host}}/api/atm/transfer
 Content-Type: application/json
+Idempotency-Key: {{$guid}}
 
 {
   "fromAccountId": "{{accountId}}",

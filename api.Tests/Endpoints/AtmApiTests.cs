@@ -19,7 +19,7 @@ public sealed class AtmApiTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _client = _factory.CreateClient();
+        _client = _factory.CreateClientWithFreshKeys();
         var accounts = await _client.GetAsync<AccountView[]>("/api/atm/accounts");
         _checking = accounts.Single(a => a.Name == "Checking").Id;
         _savings = accounts.Single(a => a.Name == "Savings").Id;
@@ -36,8 +36,19 @@ public sealed class AtmApiTests : IAsyncLifetime
         .Replace("{savings}", _savings.ToString())
         .Replace("{unknown}", Guid.Empty.ToString());
 
-    private Task<HttpResponseMessage> PostRawAsync(string url, string json) =>
-        _client.PostAsync(url, new StringContent(Resolve(json), Encoding.UTF8, "application/json"));
+    private Task<HttpResponseMessage> PostRawAsync(string url, string json, string? idempotencyKey = null)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(Resolve(json), Encoding.UTF8, "application/json"),
+        };
+        if (idempotencyKey is not null)
+        {
+            request.Headers.Add(ApiContract.IdempotencyKey, idempotencyKey);
+        }
+
+        return _client.SendAsync(request);
+    }
 
     private Task<HttpResponseMessage> WithdrawAsync(Guid accountId, decimal amount) =>
         _client.PostAsJsonAsync("/api/atm/withdraw", new { accountId, amount });
@@ -394,6 +405,135 @@ public sealed class AtmApiTests : IAsyncLifetime
         Assert.All(savings, t => Assert.Equal(_savings, t.AccountId));
     }
 
+    // The clock moves between the two sends, so running the operation again would show up as a
+    // second row with a later timestamp and a different id.
+    [Theory]
+    [InlineData("/api/atm/deposit", 1025)]
+    [InlineData("/api/atm/withdraw", 975)]
+    public async Task Repeating_a_request_with_its_key_returns_the_first_response_and_moves_the_money_once(
+        string url, int expectedBalance)
+    {
+        var key = Guid.NewGuid().ToString();
+        const string body = """{"accountId":"{checking}","amount":25}""";
+
+        var first = await PostRawAsync(url, body, key);
+        _factory.Clock.Advance(TimeSpan.FromMinutes(1));
+        var repeat = await PostRawAsync(url, body, key);
+
+        Assert.Equal((HttpStatusCode.OK, HttpStatusCode.OK), (first.StatusCode, repeat.StatusCode));
+        Assert.Equal(await first.Content.ReadAsStringAsync(), await repeat.Content.ReadAsStringAsync());
+        var row = await first.ReadAsync<LedgerRowView>();
+        var ledger = await LedgerAsync(_checking);
+        Assert.Equal(expectedBalance, await BalanceAsync(_checking));
+        Assert.Equal(2, ledger.Count);
+        Assert.Equal(row.Id, ledger[0].Id);
+    }
+
+    [Fact]
+    public async Task Repeating_a_transfer_with_its_key_returns_the_first_receipt_and_moves_the_money_once()
+    {
+        var key = Guid.NewGuid().ToString();
+        const string body = """{"fromAccountId":"{checking}","toAccountId":"{savings}","amount":100}""";
+
+        var first = await PostRawAsync("/api/atm/transfer", body, key);
+        _factory.Clock.Advance(TimeSpan.FromMinutes(1));
+        var repeat = await PostRawAsync("/api/atm/transfer", body, key);
+
+        Assert.Equal((HttpStatusCode.OK, HttpStatusCode.OK), (first.StatusCode, repeat.StatusCode));
+        Assert.Equal(await first.Content.ReadAsStringAsync(), await repeat.Content.ReadAsStringAsync());
+        var receipt = await first.ReadAsync<TransferView>();
+        var linked = (await LedgerAsync(_checking)).Concat(await LedgerAsync(_savings)).Where(t => t.CorrelationId is not null);
+        Assert.Equal((900m, 600m), (await BalanceAsync(_checking), await BalanceAsync(_savings)));
+        Assert.Equal([receipt.TransferOut.Id, receipt.TransferIn.Id], linked.Select(t => t.Id));
+    }
+
+    [Theory]
+    [InlineData("/api/atm/deposit", """{"accountId":"{checking}","amount":26}""")]
+    [InlineData("/api/atm/deposit", """{"accountId":"{savings}","amount":25}""")]
+    [InlineData("/api/atm/withdraw", """{"accountId":"{checking}","amount":25}""")]
+    [InlineData("/api/atm/transfer", """{"fromAccountId":"{checking}","toAccountId":"{savings}","amount":25}""")]
+    public async Task Reusing_a_key_for_a_different_request_is_a_422_and_moves_no_more_money(string url, string body)
+    {
+        var key = Guid.NewGuid().ToString();
+        var first = await PostRawAsync("/api/atm/deposit", """{"accountId":"{checking}","amount":25}""", key);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var response = await PostRawAsync(url, body, key);
+
+        await AssertProblemAsync(response, 422, "Idempotency key reused");
+        Assert.Equal((1025m, 500m), (await BalanceAsync(_checking), await BalanceAsync(_savings)));
+    }
+
+    public static TheoryData<string?> UnusableKeys => new() { null, "", "   ", new string('k', 101) };
+
+    [Theory]
+    [MemberData(nameof(UnusableKeys))]
+    public async Task Writes_without_a_usable_idempotency_key_are_400_and_move_no_money(string? key)
+    {
+        using var client = _factory.CreateClient();
+        var writes = new[]
+        {
+            ("/api/atm/deposit", """{"accountId":"{checking}","amount":25}"""),
+            ("/api/atm/withdraw", """{"accountId":"{checking}","amount":25}"""),
+            ("/api/atm/transfer", """{"fromAccountId":"{checking}","toAccountId":"{savings}","amount":25}"""),
+        };
+
+        foreach (var (url, body) in writes)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(Resolve(body), Encoding.UTF8, "application/json"),
+            };
+            if (key is not null)
+            {
+                request.Headers.TryAddWithoutValidation(ApiContract.IdempotencyKey, key);
+            }
+
+            await AssertProblemAsync(await client.SendAsync(request), 400, "Invalid idempotency key");
+        }
+
+        Assert.Equal((1000m, 500m), (await BalanceAsync(_checking), await BalanceAsync(_savings)));
+    }
+
+    [Fact]
+    public async Task A_key_of_100_characters_is_accepted()
+    {
+        var response = await PostRawAsync("/api/atm/deposit", """{"accountId":"{checking}","amount":25}""", new string('k', 100));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_failed_request_saves_nothing_so_the_same_key_runs_again_once_it_can_succeed()
+    {
+        var key = Guid.NewGuid().ToString();
+        const string withdrawal = """{"accountId":"{checking}","amount":1500}""";
+
+        await AssertProblemAsync(await PostRawAsync("/api/atm/withdraw", withdrawal, key), 422, "Insufficient funds");
+        await PostRawAsync("/api/atm/deposit", """{"accountId":"{checking}","amount":600}""");
+        var retry = await PostRawAsync("/api/atm/withdraw", withdrawal, key);
+
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        Assert.Equal(100m, await BalanceAsync(_checking));
+    }
+
+    [Theory]
+    [InlineData("/api/atm/deposit", """{"accountId":"{checking}","amount":25}""", 1025, 500, 1)]
+    [InlineData("/api/atm/transfer", """{"fromAccountId":"{checking}","toAccountId":"{savings}","amount":100}""", 900, 600, 2)]
+    public async Task Concurrent_requests_with_one_key_all_get_the_first_response_and_move_the_money_once(
+        string url, string body, int checking, int savings, int newRows)
+    {
+        var key = Guid.NewGuid().ToString();
+
+        var responses = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => Task.Run(() => PostRawAsync(url, body, key))));
+
+        Assert.All(responses, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+        var bodies = await Task.WhenAll(responses.Select(r => r.Content.ReadAsStringAsync()));
+        Assert.Single(bodies.Distinct());
+        Assert.Equal(((decimal)checking, (decimal)savings), (await BalanceAsync(_checking), await BalanceAsync(_savings)));
+        Assert.Equal(2 + newRows, (await LedgerAsync(_checking)).Count + (await LedgerAsync(_savings)).Count);
+    }
+
     [Fact]
     public async Task Unexpected_database_failure_returns_500_without_internals_and_leaves_the_balance()
     {
@@ -416,7 +556,7 @@ public sealed class AtmApiTests : IAsyncLifetime
     {
         await using var factory = new AtmApiFactory(configureServices: services =>
             services.AddScoped<IAccountService>(_ => new ThrowingService(new DbUpdateConcurrencyException("stale"))));
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClientWithFreshKeys();
 
         var response = await client.PostAsJsonAsync("/api/atm/deposit", new { accountId = Guid.NewGuid(), amount = 1m });
 
@@ -431,7 +571,7 @@ public sealed class AtmApiTests : IAsyncLifetime
     {
         await using var factory = new AtmApiFactory(environment, services =>
             services.AddScoped<IAccountService>(_ => new ThrowingService(new InvalidOperationException("secret connection detail"))));
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClientWithFreshKeys();
 
         var response = await client.PostAsJsonAsync("/api/atm/deposit", new { accountId = Guid.NewGuid(), amount = 1m });
 
@@ -457,8 +597,8 @@ public sealed class AtmApiTests : IAsyncLifetime
     {
         public Task<IReadOnlyList<Account>> GetAccountsAsync(CancellationToken ct = default) => throw exception;
         public Task<HistoryPage> GetHistoryAsync(Guid accountId, int limit, HistoryCursor? after = null, CancellationToken ct = default) => throw exception;
-        public Task<Transaction> DepositAsync(Guid accountId, Money amount, CancellationToken ct = default) => throw exception;
-        public Task<Transaction> WithdrawAsync(Guid accountId, Money amount, CancellationToken ct = default) => throw exception;
-        public Task<TransferReceipt> TransferAsync(Guid fromAccountId, Guid toAccountId, Money amount, CancellationToken ct = default) => throw exception;
+        public Task<Transaction> DepositAsync(IdempotencyKey key, Guid accountId, Money amount, CancellationToken ct = default) => throw exception;
+        public Task<Transaction> WithdrawAsync(IdempotencyKey key, Guid accountId, Money amount, CancellationToken ct = default) => throw exception;
+        public Task<TransferReceipt> TransferAsync(IdempotencyKey key, Guid fromAccountId, Guid toAccountId, Money amount, CancellationToken ct = default) => throw exception;
     }
 }
