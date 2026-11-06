@@ -3,7 +3,7 @@ import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { ArrowDownUpIcon, CircleCheckIcon, Loader2Icon } from '@lucide/vue'
 import { ApiError } from '@/api/atmClient'
 import { useAtm } from '@/composables/useAtm'
-import { formatMoney, parseAmount } from '@/lib/money'
+import { addMoney, formatMoney, limitDecimals, parseAmount, subtractMoney, toCents } from '@/lib/money'
 import type { Operation } from '@/types'
 import AnimatedMoney from './AnimatedMoney.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -46,14 +46,16 @@ const problem = computed(() => {
   if (amount.value.trim() === '') return null
   if (value === null) return 'Enter an amount greater than zero, such as 25.00.'
   const available = from.value?.balance ?? 0
-  if (debits.value && value > available) return `That is ${formatMoney(value - available)} more than is available.`
+  if (debits.value && toCents(value) > toCents(available)) {
+    return `That is ${formatMoney(subtractMoney(value, available))} more than is available.`
+  }
   return null
 })
 
 const projected = computed(() => {
   const value = parsed.value
   if (value === null || problem.value !== null || from.value === undefined) return null
-  return from.value.balance + (debits.value ? -value : value)
+  return debits.value ? subtractMoney(from.value.balance, value) : addMoney(from.value.balance, value)
 })
 
 const canReview = computed(
@@ -64,6 +66,15 @@ const canReview = computed(
     from.value !== undefined &&
     (tab.value !== 'transfer' || to.value !== undefined),
 )
+
+// The field is one-way bound so this handler is the only writer: typing or pasting a third
+// decimal is cut off instead of flagged as an error.
+function trimDecimals(event: Event) {
+  const input = event.target as HTMLInputElement
+  const limited = limitDecimals(input.value)
+  if (limited !== input.value) input.value = limited
+  amount.value = limited
+}
 
 function focusAmount() {
   void nextTick(() => amountField.value?.querySelector('input')?.focus())
@@ -99,6 +110,18 @@ function review() {
   step.value = 'review'
 }
 
+// A failed confirm may still have reached the server (the response can be lost on the way
+// back), so confirming the same request again reuses its idempotency key and the server
+// replays the first result. Only a success ends the attempt. A tab or account change does
+// not, because coming back to the same request is still a retry.
+let attempt: { request: string; key: string } | null = null
+
+function keyFor(...request: (string | number)[]) {
+  const text = request.join(' ')
+  if (attempt?.request !== text) attempt = { request: text, key: crypto.randomUUID() }
+  return attempt.key
+}
+
 async function execute() {
   const value = parsed.value
   const source = from.value
@@ -106,17 +129,18 @@ async function execute() {
   try {
     let detail: string
     if (tab.value === 'deposit') {
-      await deposit(source.id, value)
+      await deposit(source.id, value, keyFor('deposit', source.id, value))
       detail = `${formatMoney(value)} deposited to ${source.name}`
     } else if (tab.value === 'withdraw') {
-      await withdraw(source.id, value)
+      await withdraw(source.id, value, keyFor('withdraw', source.id, value))
       detail = `${formatMoney(value)} withdrawn from ${source.name}`
     } else {
       const target = to.value
       if (target === undefined) return
-      await transfer(source.id, target.id, value)
+      await transfer(source.id, target.id, value, keyFor('transfer', source.id, target.id, value))
       detail = `${formatMoney(value)} moved from ${source.name} to ${target.name}`
     }
+    attempt = null
     const balance = accounts.value.find((a) => a.id === source.id)?.balance ?? 0
     receipt.value = { title: `${meta.value.noun} complete`, detail, accountName: source.name, balance }
     step.value = 'done'
@@ -211,13 +235,14 @@ function describeFailure(e: unknown): { title: string; detail?: string } {
             <div ref="amountField">
               <Input
                 id="amount"
-                v-model="amount"
+                :model-value="amount"
                 inputmode="decimal"
                 autocomplete="off"
                 placeholder="0.00"
                 class="font-heading h-12 text-2xl tabular-nums md:text-2xl"
                 :aria-invalid="problem !== null"
                 aria-describedby="amount-help"
+                @input="trimDecimals"
               />
             </div>
             <p

@@ -17,6 +17,9 @@ public sealed class AtmApiFactory(string environment = "Development", Action<ISe
 
     public string ConnectionString => $"Data Source={_path};Default Timeout=5";
 
+    // A client that sends each operation once: every POST without an Idempotency-Key gets a new one.
+    public HttpClient CreateClientWithFreshKeys() => CreateDefaultClient(new FreshIdempotencyKeys());
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment(environment);
@@ -35,6 +38,19 @@ public sealed class AtmApiFactory(string environment = "Development", Action<ISe
         foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
         {
             File.Delete(_path + suffix);
+        }
+    }
+
+    private sealed class FreshIdempotencyKeys : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Post && !request.Headers.Contains(ApiContract.IdempotencyKey))
+            {
+                request.Headers.Add(ApiContract.IdempotencyKey, Guid.NewGuid().ToString());
+            }
+
+            return base.SendAsync(request, cancellationToken);
         }
     }
 }

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { account, ledgerRow } from '@/__tests__/fixtures'
 import type { Transaction } from '@/types'
@@ -25,7 +25,7 @@ afterEach(() => {
 })
 
 // useAtm keeps module-level state, so every test gets a fresh module graph.
-async function mountLedger(history: Transaction[] | Error) {
+async function mountLedger(history: Transaction[] | Error, nextCursor: string | null = null) {
   vi.resetModules()
   const { atmClient } = await import('@/api/atmClient')
   const { useAtm } = await import('@/composables/useAtm')
@@ -34,12 +34,12 @@ async function mountLedger(history: Transaction[] | Error) {
   const api = vi.mocked(atmClient)
   api.getAccounts.mockResolvedValue([account({ id: 'chk', name: 'Checking' })])
   if (history instanceof Error) api.getHistory.mockRejectedValue(history)
-  else api.getHistory.mockResolvedValue({ items: history, nextCursor: null })
+  else api.getHistory.mockResolvedValue({ items: history, nextCursor })
   await useAtm().refresh()
 
   wrapper = mount(LedgerTable)
   await flushPromises()
-  return wrapper
+  return Object.assign(wrapper, { api })
 }
 
 const rowCells = (w: VueWrapper) =>
@@ -90,5 +90,73 @@ describe('LedgerTable', () => {
     const w = await mountLedger([ledgerRow()])
 
     expect(w.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  describe('pagination', () => {
+    test('is hidden when everything fits on one page', async () => {
+      const w = await mountLedger([ledgerRow()])
+
+      expect(w.find('nav').exists()).toBe(false)
+    })
+
+    test('Older loads the next page, Newer returns to the previous one', async () => {
+      const w = await mountLedger([ledgerRow({ amount: 1 })], 'c1')
+      expect(w.get('[data-testid="page-indicator"]').text()).toBe('Page 1')
+      expect(w.get('[data-testid="page-newer"]').attributes('disabled')).toBeDefined()
+
+      w.api.getHistory.mockResolvedValueOnce({ items: [ledgerRow({ amount: 2 })], nextCursor: null })
+      await w.get('[data-testid="page-older"]').trigger('click')
+      await flushPromises()
+
+      expect(w.api.getHistory).toHaveBeenLastCalledWith('chk', 10, 'c1')
+      expect(w.get('[data-testid="page-indicator"]').text()).toBe('Page 2')
+      expect(w.get('[data-testid="ledger-amount"]').text()).toBe('+$2.00')
+      expect(w.get('[data-testid="page-older"]').attributes('disabled')).toBeDefined()
+
+      w.api.getHistory.mockResolvedValueOnce({ items: [ledgerRow({ amount: 1 })], nextCursor: 'c1' })
+      await w.get('[data-testid="page-newer"]').trigger('click')
+      await flushPromises()
+
+      expect(w.get('[data-testid="page-indicator"]').text()).toBe('Page 1')
+      expect(w.get('[data-testid="ledger-amount"]').text()).toBe('+$1.00')
+    })
+  })
+
+  describe('day grouping', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-06-15T12:00:00'))
+    })
+    afterEach(() => vi.useRealTimers())
+
+    const headings = (w: VueWrapper) => w.findAll('h3').map((h) => h.text())
+
+    test('labels today, yesterday and older days, newest first', async () => {
+      const w = await mountLedger([
+        ledgerRow({ timestampUtc: '2026-06-15T10:00:00' }),
+        ledgerRow({ timestampUtc: '2026-06-15T09:00:00' }),
+        ledgerRow({ timestampUtc: '2026-06-14T10:00:00' }),
+        ledgerRow({ timestampUtc: '2026-06-01T10:00:00' }),
+      ])
+
+      expect(headings(w)).toEqual(['Today', 'Yesterday', 'Jun 1, 2026'])
+      const sections = w.findAll('section')
+      expect(sections.map((s) => s.findAll('[data-testid="ledger-row"]').length)).toEqual([2, 1, 1])
+    })
+
+    test('"Yesterday" still works across a month boundary', async () => {
+      vi.setSystemTime(new Date('2026-07-01T12:00:00'))
+      const w = await mountLedger([ledgerRow({ timestampUtc: '2026-06-30T10:00:00' })])
+
+      expect(headings(w)).toEqual(['Yesterday'])
+    })
+  })
+
+  test('floating point noise in amounts never leaks into the display', async () => {
+    const w = await mountLedger([
+      ledgerRow({ accountId: 'chk', type: 'Deposit', amount: 0.1 + 0.2, balanceAfter: 100.1 + 200.2 }),
+    ])
+
+    expect(rowCells(w)).toEqual([{ type: 'Deposit', amount: '+$0.30', balance: '$300.30' }])
   })
 })

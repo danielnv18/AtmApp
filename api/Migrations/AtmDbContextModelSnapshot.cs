@@ -43,6 +43,30 @@ namespace AtmApp.Api.Migrations
                         });
                 });
 
+            modelBuilder.Entity("AtmApp.Api.Domain.IdempotencyRecord", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedUtc")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Request")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TransactionId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Key");
+
+                    b.HasIndex("TransactionId");
+
+                    b.ToTable("IdempotencyRecords");
+                });
+
             modelBuilder.Entity("AtmApp.Api.Domain.Transaction", b =>
                 {
                     b.Property<Guid>("Id")
@@ -87,6 +111,15 @@ namespace AtmApp.Api.Migrations
 
                             t.HasCheckConstraint("CK_Transactions_BalanceAfter", "\"BalanceAfter\" >= 0");
                         });
+                });
+
+            modelBuilder.Entity("AtmApp.Api.Domain.IdempotencyRecord", b =>
+                {
+                    b.HasOne("AtmApp.Api.Domain.Transaction", null)
+                        .WithMany()
+                        .HasForeignKey("TransactionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("AtmApp.Api.Domain.Transaction", b =>

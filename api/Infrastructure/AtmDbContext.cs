@@ -21,6 +21,7 @@ public class AtmDbContext(DbContextOptions<AtmDbContext> options) : DbContext(op
 
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -56,6 +57,17 @@ public class AtmDbContext(DbContextOptions<AtmDbContext> options) : DbContext(op
             // orders one SaveChanges' inserts by key, not by Add order, so save at most one new row
             // per account per SaveChanges or the chain trigger may see them out of sequence.
             transaction.HasIndex(t => new { t.AccountId, t.Sequence }).IsUnique();
+        });
+
+        modelBuilder.Entity<IdempotencyRecord>(record =>
+        {
+            // The key is the primary key, so of two requests racing with one key only one can
+            // commit its ledger rows; the other's whole SaveChanges rolls back.
+            record.HasKey(r => r.Key);
+            record.Property(r => r.Key).HasMaxLength(IdempotencyKey.MaxLength);
+            record.Property(r => r.Request).IsRequired().HasMaxLength(200);
+            record.Property(r => r.CreatedUtc).HasConversion(UtcTicks);
+            record.HasOne<Transaction>().WithMany().HasForeignKey(r => r.TransactionId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

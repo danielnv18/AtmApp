@@ -25,6 +25,7 @@ async function setup() {
 }
 
 const page = (...items: HistoryPage['items']): HistoryPage => ({ items, nextCursor: null })
+const pageWithMore = (cursor: string, ...items: HistoryPage['items']): HistoryPage => ({ items, nextCursor: cursor })
 
 const checking = () => account({ id: 'chk', name: 'Checking', balance: 100 })
 const savings = () => account({ id: 'sav', name: 'Savings', balance: 500 })
@@ -49,7 +50,7 @@ describe('refresh', () => {
     expect(atm.accounts.value.map((a) => a.id)).toEqual(['chk', 'sav'])
     expect(atm.accountsError.value).toBeNull()
     expect(atm.ledgerAccountId.value).toBe('chk')
-    expect(api.getHistory).toHaveBeenCalledWith('chk')
+    expect(api.getHistory).toHaveBeenCalledWith('chk', 10, null)
     expect(atm.history.value).toEqual([row])
   })
 
@@ -60,7 +61,7 @@ describe('refresh', () => {
     await atm.refresh()
 
     expect(atm.ledgerAccountId.value).toBe('sav')
-    expect(api.getHistory).toHaveBeenLastCalledWith('sav')
+    expect(api.getHistory).toHaveBeenLastCalledWith('sav', 10, null)
   })
 
   test('a failure sets accountsError and keeps the accounts already loaded', async () => {
@@ -122,9 +123,9 @@ describe('operations', () => {
     api.deposit.mockResolvedValue(row)
     api.getHistory.mockResolvedValue(page(row))
 
-    await atm.deposit('chk', 25)
+    await atm.deposit('chk', 25, 'key-1')
 
-    expect(api.deposit).toHaveBeenCalledWith('chk', 25)
+    expect(api.deposit).toHaveBeenCalledWith('chk', 25, 'key-1')
     expect(atm.accounts.value.map((a) => [a.id, a.balance])).toEqual([
       ['chk', 125],
       ['sav', 500],
@@ -136,9 +137,9 @@ describe('operations', () => {
     const { api, atm } = await loaded()
     api.withdraw.mockResolvedValue(ledgerRow({ accountId: 'sav', type: 'Withdrawal', amount: 20, balanceAfter: 480 }))
 
-    await atm.withdraw('sav', 20)
+    await atm.withdraw('sav', 20, 'key-2')
 
-    expect(api.withdraw).toHaveBeenCalledWith('sav', 20)
+    expect(api.withdraw).toHaveBeenCalledWith('sav', 20, 'key-2')
     expect(atm.accounts.value.map((a) => [a.id, a.balance])).toEqual([
       ['chk', 100],
       ['sav', 480],
@@ -151,9 +152,9 @@ describe('operations', () => {
       transferReceipt({ accountId: 'sav', balanceAfter: 400 }, { accountId: 'chk', balanceAfter: 200 }, 100),
     )
 
-    await atm.transfer('sav', 'chk', 100)
+    await atm.transfer('sav', 'chk', 100, 'key-3')
 
-    expect(api.transfer).toHaveBeenCalledWith('sav', 'chk', 100)
+    expect(api.transfer).toHaveBeenCalledWith('sav', 'chk', 100, 'key-3')
     expect(atm.accounts.value.map((a) => [a.id, a.balance])).toEqual([
       ['chk', 200],
       ['sav', 400],
@@ -165,7 +166,7 @@ describe('operations', () => {
     const call = deferred<ReturnType<typeof ledgerRow>>()
     api.withdraw.mockReturnValue(call.promise)
 
-    const op = atm.withdraw('chk', 20)
+    const op = atm.withdraw('chk', 20, 'key-1')
     expect(atm.pending.value).toBe('withdraw')
 
     call.resolve(ledgerRow({ accountId: 'chk', balanceAfter: 80 }))
@@ -179,7 +180,7 @@ describe('operations', () => {
     const call = deferred<never>()
     api.transfer.mockReturnValue(call.promise)
 
-    const op = atm.transfer('chk', 'sav', 1000)
+    const op = atm.transfer('chk', 'sav', 1000, 'key-1')
     expect(atm.pending.value).toBe('transfer')
     call.reject(failure)
 
@@ -230,5 +231,70 @@ describe('history race', () => {
 
     expect(atm.historyError.value).toBeNull()
     expect(atm.history.value).toEqual([])
+  })
+})
+
+describe('paging', () => {
+  test('nextPage requests the cursor from the previous page and previousPage steps back', async () => {
+    const { api, atm } = await loaded()
+    const [a, b, c] = [ledgerRow(), ledgerRow(), ledgerRow()]
+    api.getHistory
+      .mockResolvedValueOnce(pageWithMore('c1', a))
+      .mockResolvedValueOnce(pageWithMore('c2', b))
+      .mockResolvedValueOnce(page(c))
+    await atm.showHistory('chk')
+    expect(atm.hasPrevious.value).toBe(false)
+    expect(atm.hasNext.value).toBe(true)
+
+    await atm.nextPage()
+    await atm.nextPage()
+    expect(api.getHistory).toHaveBeenNthCalledWith(3, 'chk', 10, 'c1')
+    expect(api.getHistory).toHaveBeenLastCalledWith('chk', 10, 'c2')
+    expect(atm.page.value).toBe(3)
+    expect(atm.history.value).toEqual([c])
+    expect(atm.hasNext.value).toBe(false)
+
+    api.getHistory.mockResolvedValueOnce(pageWithMore('c2', b))
+    await atm.previousPage()
+    expect(api.getHistory).toHaveBeenLastCalledWith('chk', 10, 'c1')
+    expect(atm.page.value).toBe(2)
+    expect(atm.history.value).toEqual([b])
+  })
+
+  test('nextPage and previousPage do nothing at the ends', async () => {
+    const { api, atm } = await loaded()
+    api.getHistory.mockClear()
+
+    await atm.nextPage()
+    await atm.previousPage()
+
+    expect(api.getHistory).not.toHaveBeenCalled()
+    expect(atm.page.value).toBe(1)
+  })
+
+  test('a new transaction returns to the newest page', async () => {
+    const { api, atm } = await loaded()
+    api.getHistory.mockResolvedValueOnce(pageWithMore('c1', ledgerRow())).mockResolvedValueOnce(page())
+    await atm.showHistory('chk')
+    await atm.nextPage()
+    expect(atm.page.value).toBe(2)
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 110 }))
+
+    await atm.deposit('chk', 10, 'key-1')
+
+    expect(atm.page.value).toBe(1)
+    expect(api.getHistory).toHaveBeenLastCalledWith('chk', 10, null)
+  })
+
+  test('switching accounts returns to the first page', async () => {
+    const { api, atm } = await loaded()
+    api.getHistory.mockResolvedValueOnce(pageWithMore('c1', ledgerRow())).mockResolvedValueOnce(page())
+    await atm.showHistory('chk')
+    await atm.nextPage()
+
+    await atm.showHistory('sav')
+
+    expect(atm.page.value).toBe(1)
+    expect(api.getHistory).toHaveBeenLastCalledWith('sav', 10, null)
   })
 })

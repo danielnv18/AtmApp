@@ -28,6 +28,9 @@ public sealed class AccountServiceTests : IAsyncLifetime
 
     private AccountService NewService(AtmDbContext db) => new(db, new FixedClock(Now));
 
+    private static IdempotencyKey NewKey() =>
+        IdempotencyKey.TryParse(Guid.NewGuid().ToString(), out var key) ? key : throw new InvalidOperationException();
+
     private async Task<(decimal Checking, decimal Savings, int LedgerRows)> SnapshotAsync()
     {
         await using var db = _database.NewContext();
@@ -41,8 +44,8 @@ public sealed class AccountServiceTests : IAsyncLifetime
         await using (var db = _database.NewContext())
         {
             var service = NewService(db);
-            await service.DepositAsync(_checking, Money.Parse(50.25m));
-            await service.WithdrawAsync(_checking, Money.Parse(0.25m));
+            await service.DepositAsync(NewKey(), _checking, Money.Parse(50.25m));
+            await service.WithdrawAsync(NewKey(), _checking, Money.Parse(0.25m));
         }
 
         Assert.Equal((1050.00m, 500.00m, 4), await SnapshotAsync());
@@ -53,7 +56,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
     {
         await using (var db = _database.NewContext())
         {
-            await NewService(db).TransferAsync(_checking, _savings, Money.Parse(200m));
+            await NewService(db).TransferAsync(NewKey(), _checking, _savings, Money.Parse(200m));
         }
 
         await using var verify = _database.NewContext();
@@ -71,7 +74,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
         await using (var db = _database.NewContext())
         {
             var ex = await Assert.ThrowsAsync<DomainException>(
-                () => NewService(db).TransferAsync(_savings, _checking, Money.Parse(500.01m)));
+                () => NewService(db).TransferAsync(NewKey(), _savings, _checking, Money.Parse(500.01m)));
             Assert.Equal(DomainError.InsufficientFunds, ex.Error);
         }
 
@@ -89,7 +92,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
         await using (var db = _database.NewContext(new ConcurrentEditTo(editedAccount)))
         {
             await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
-                () => NewService(db).TransferAsync(_checking, _savings, Money.Parse(100m)));
+                () => NewService(db).TransferAsync(NewKey(), _checking, _savings, Money.Parse(100m)));
         }
 
         Assert.Equal((1000m, 500m, 2), await SnapshotAsync());
@@ -101,7 +104,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
         await using var db = _database.NewContext();
 
         var ex = await Assert.ThrowsAsync<DomainException>(
-            () => NewService(db).TransferAsync(_checking, _checking, Money.Parse(1m)));
+            () => NewService(db).TransferAsync(NewKey(), _checking, _checking, Money.Parse(1m)));
 
         Assert.Equal(DomainError.SameAccountTransfer, ex.Error);
     }
@@ -115,7 +118,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
 
         await Assert.ThrowsAsync<AccountNotFoundException>(() => service.GetHistoryAsync(unknown, 10));
         await Assert.ThrowsAsync<AccountNotFoundException>(
-            () => service.TransferAsync(_checking, unknown, Money.Parse(1m)));
+            () => service.TransferAsync(NewKey(), _checking, unknown, Money.Parse(1m)));
 
         Assert.Equal((1000m, 500m, 2), await SnapshotAsync());
     }
@@ -127,7 +130,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
         var service = NewService(db);
         for (var i = 0; i < 3; i++)
         {
-            await service.DepositAsync(_checking, Money.Parse(1m));
+            await service.DepositAsync(NewKey(), _checking, Money.Parse(1m));
         }
 
         var all = (await service.GetHistoryAsync(_checking, 10)).Items;
@@ -148,7 +151,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
         // Five rows share one timestamp, so only the ledger sequence keeps page boundaries stable.
         for (var i = 0; i < 5; i++)
         {
-            await service.DepositAsync(_checking, Money.Parse(1m));
+            await service.DepositAsync(NewKey(), _checking, Money.Parse(1m));
         }
 
         var expected = (await service.GetHistoryAsync(_checking, 200)).Items.Select(t => t.Id).ToList();
@@ -164,7 +167,7 @@ public sealed class AccountServiceTests : IAsyncLifetime
 
             if (pages == 1)
             {
-                await new AccountService(db, new FixedClock(Now.AddMinutes(1))).DepositAsync(_checking, Money.Parse(1m));
+                await new AccountService(db, new FixedClock(Now.AddMinutes(1))).DepositAsync(NewKey(), _checking, Money.Parse(1m));
             }
         }
         while (cursor is not null);
@@ -180,10 +183,10 @@ public sealed class AccountServiceTests : IAsyncLifetime
         await using (var db = _database.NewContext())
         {
             var service = NewService(db);
-            await service.DepositAsync(_checking, Money.Parse(12.34m));
-            await service.TransferAsync(_checking, _savings, Money.Parse(300m));
-            await service.WithdrawAsync(_savings, Money.Parse(0.01m));
-            await service.TransferAsync(_savings, _checking, Money.Parse(99.99m));
+            await service.DepositAsync(NewKey(), _checking, Money.Parse(12.34m));
+            await service.TransferAsync(NewKey(), _checking, _savings, Money.Parse(300m));
+            await service.WithdrawAsync(NewKey(), _savings, Money.Parse(0.01m));
+            await service.TransferAsync(NewKey(), _savings, _checking, Money.Parse(99.99m));
         }
 
         await using var verify = _database.NewContext();
@@ -206,6 +209,46 @@ public sealed class AccountServiceTests : IAsyncLifetime
         }
     }
 
+    // Both requests miss the key lookup. The winner then changes the account the loser loaded,
+    // so the loser's save fails on the concurrency token and it answers with the winner's row.
+    [Fact]
+    public async Task A_request_that_loses_a_same_key_race_returns_the_winners_row()
+    {
+        var key = NewKey();
+        Transaction? winner = null;
+        await using (var db = _database.NewContext(new BeforeSave(async () =>
+        {
+            await using var other = _database.NewContext();
+            winner = await NewService(other).DepositAsync(key, _checking, Money.Parse(25m));
+        })))
+        {
+            var row = await NewService(db).DepositAsync(key, _checking, Money.Parse(25m));
+
+            Assert.Equal(winner!.Id, row.Id);
+        }
+
+        Assert.Equal((1025m, 500m, 3), await SnapshotAsync());
+    }
+
+    // The winner used the key on the other account, so only the key's primary key stops the
+    // loser. Its balance update and ledger row must roll back with the rejected record.
+    [Fact]
+    public async Task A_request_that_loses_a_key_race_to_a_different_request_is_rejected_and_saves_nothing()
+    {
+        var key = NewKey();
+        await using (var db = _database.NewContext(new BeforeSave(async () =>
+        {
+            await using var other = _database.NewContext();
+            await NewService(other).DepositAsync(key, _savings, Money.Parse(25m));
+        })))
+        {
+            await Assert.ThrowsAsync<IdempotencyKeyReusedException>(
+                () => NewService(db).DepositAsync(key, _checking, Money.Parse(25m)));
+        }
+
+        Assert.Equal((1000m, 525m, 3), await SnapshotAsync());
+    }
+
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
@@ -226,6 +269,19 @@ public sealed class AccountServiceTests : IAsyncLifetime
             command.CommandText = "UPDATE \"Accounts\" SET \"LastSequence\" = \"LastSequence\" + 1 WHERE \"Id\" = $id";
             command.Parameters.AddWithValue("$id", accountId.ToString().ToUpperInvariant());
             Assert.Equal(1, await command.ExecuteNonQueryAsync(cancellationToken));
+            return result;
+        }
+    }
+
+    // Runs another request to completion between our reads and our commit.
+    private sealed class BeforeSave(Func<Task> otherRequest) : SaveChangesInterceptor
+    {
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            await otherRequest();
             return result;
         }
     }
