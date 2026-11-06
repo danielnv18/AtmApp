@@ -71,7 +71,7 @@ async function mountPanel(
 }
 
 describe('review button', () => {
-  test.each(['', 'abc', '0', '1.234'])('is disabled for amount %j', async (value) => {
+  test.each(['', 'abc', '0', '0.00'])('is disabled for amount %j', async (value) => {
     const { enter, reviewButton } = await mountPanel('deposit')
     await enter(value)
     expect(reviewButton().element.disabled).toBe(true)
@@ -424,5 +424,37 @@ describe('gaps', () => {
 
     expect(panel.get('[role="alert"]').text()).toContain('Insufficient funds')
     expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75)
+  })
+})
+
+describe('decimal places', () => {
+  test.each([
+    ['0.03333', '0.03'],
+    ['1.234', '1.23'],
+    ['10.999', '10.99'],
+    ['5.00', '5.00'],
+    ['5.5', '5.5'],
+  ])('typing %j leaves %j in the field', async (typed, shown) => {
+    const { enter, amountInput } = await mountPanel('deposit')
+    await enter(typed)
+    expect(amountInput().element.value).toBe(shown)
+  })
+
+  test('a third decimal is cut off and the amount stays valid', async () => {
+    const { enter, help, reviewButton } = await mountPanel('deposit')
+    await enter('0.03333')
+
+    expect(help()).toBe('New balance: $100.03')
+    expect(reviewButton().element.disabled).toBe(false)
+  })
+
+  test('the API receives the two-decimal amount', async () => {
+    const { api, enter, review, confirm } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 100.03 }))
+    await enter('0.03333')
+    await review()
+    await confirm()
+
+    expect(api.deposit).toHaveBeenCalledWith('chk', 0.03)
   })
 })

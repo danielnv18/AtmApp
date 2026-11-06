@@ -20,3 +20,6 @@ export function parseAmount(input: string): number | null {
   const value = fromCents(toCents(Number(text)))
   return value > 0 ? value : null
 }
+
+// Keeps what a user types or pastes to at most two decimal places ("0.03333" becomes "0.03").
+export const limitDecimals = (text: string) => text.replace(/(\.\d{2})\d+/, '$1')

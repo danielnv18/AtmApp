@@ -4,9 +4,11 @@ import type { Transaction } from '@/types'
 import { useAtm } from '@/composables/useAtm'
 import { formatMoney } from '@/lib/money'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
-const { accounts, ledgerAccountId, history, historyError } = useAtm()
+const { accounts, ledgerAccountId, history, historyError, loadingHistory, page, hasNext, hasPrevious, nextPage, previousPage } =
+  useAtm()
 
 const TYPE_META: Record<Transaction['type'], { label: string; credit: boolean }> = {
   Deposit: { label: 'Deposit', credit: true },
@@ -86,6 +88,19 @@ const groups = computed(() => {
           </li>
         </TransitionGroup>
       </section>
+      <nav
+        v-if="hasPrevious || hasNext"
+        class="flex items-center justify-between border-t pt-3"
+        aria-label="Activity pages"
+      >
+        <Button variant="outline" size="sm" :disabled="!hasPrevious || loadingHistory" data-testid="page-newer" @click="previousPage">
+          Newer
+        </Button>
+        <span class="text-muted-foreground text-xs" data-testid="page-indicator">Page {{ page }}</span>
+        <Button variant="outline" size="sm" :disabled="!hasNext || loadingHistory" data-testid="page-older" @click="nextPage">
+          Older
+        </Button>
+      </nav>
     </CardContent>
   </Card>
 </template>

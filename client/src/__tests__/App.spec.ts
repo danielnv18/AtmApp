@@ -53,7 +53,7 @@ describe('App', () => {
     const { api, app } = await mountApp([chk(), sav()])
 
     expect(api.getAccounts).toHaveBeenCalledTimes(1)
-    expect(api.getHistory).toHaveBeenCalledWith('chk')
+    expect(api.getHistory).toHaveBeenCalledWith('chk', 10, null)
     expect(app.findAll('[data-testid="account-card"]')).toHaveLength(2)
     expect(app.get('[data-testid="ledger"]').text()).toContain('Checking')
     expect(app.text()).toMatch(/Updated /)
@@ -113,7 +113,7 @@ describe('App', () => {
     await app.get('[data-account-name="Savings"]').trigger('click')
     await flushPromises()
 
-    expect(api.getHistory).toHaveBeenLastCalledWith('sav')
+    expect(api.getHistory).toHaveBeenLastCalledWith('sav', 10, null)
     expect(app.get('[data-testid="ledger"]').text()).toContain('Savings')
     expect(app.get('[data-testid="ledger"]').text()).toContain('Gift')
   })

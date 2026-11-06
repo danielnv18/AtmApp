@@ -3,7 +3,7 @@ import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { ArrowDownUpIcon, CircleCheckIcon, Loader2Icon } from '@lucide/vue'
 import { ApiError } from '@/api/atmClient'
 import { useAtm } from '@/composables/useAtm'
-import { addMoney, formatMoney, parseAmount, subtractMoney, toCents } from '@/lib/money'
+import { addMoney, formatMoney, limitDecimals, parseAmount, subtractMoney, toCents } from '@/lib/money'
 import type { Operation } from '@/types'
 import AnimatedMoney from './AnimatedMoney.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -66,6 +66,15 @@ const canReview = computed(
     from.value !== undefined &&
     (tab.value !== 'transfer' || to.value !== undefined),
 )
+
+// The field is one-way bound so this handler is the only writer: typing or pasting a third
+// decimal is cut off instead of flagged as an error.
+function trimDecimals(event: Event) {
+  const input = event.target as HTMLInputElement
+  const limited = limitDecimals(input.value)
+  if (limited !== input.value) input.value = limited
+  amount.value = limited
+}
 
 function focusAmount() {
   void nextTick(() => amountField.value?.querySelector('input')?.focus())
@@ -213,13 +222,14 @@ function describeFailure(e: unknown): { title: string; detail?: string } {
             <div ref="amountField">
               <Input
                 id="amount"
-                v-model="amount"
+                :model-value="amount"
                 inputmode="decimal"
                 autocomplete="off"
                 placeholder="0.00"
                 class="font-heading h-12 text-2xl tabular-nums md:text-2xl"
                 :aria-invalid="problem !== null"
                 aria-describedby="amount-help"
+                @input="trimDecimals"
               />
             </div>
             <p

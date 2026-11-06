@@ -55,6 +55,13 @@ describe('reads', () => {
     await atmClient.getHistory('a1', 10)
     expect(lastCall().url).toBe('/api/atm/accounts/a1/history?limit=10')
   })
+
+  test('getHistory sends the cursor, URL-encoded', async () => {
+    fetchMock.mockResolvedValue(json({ items: [], nextCursor: null }))
+
+    await atmClient.getHistory('a1', 10, 'a+b/c=')
+    expect(lastCall().url).toBe('/api/atm/accounts/a1/history?limit=10&cursor=a%2Bb%2Fc%3D')
+  })
 })
 
 describe('writes', () => {

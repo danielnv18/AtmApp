@@ -27,8 +27,11 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 
 export const atmClient = {
   getAccounts: () => request<Account[]>('/accounts'),
-  getHistory: (accountId: string, limit = 50) =>
-    request<HistoryPage>(`/accounts/${accountId}/history?limit=${limit}`),
+  getHistory: (accountId: string, limit = 50, cursor?: string | null) => {
+    const query = new URLSearchParams({ limit: String(limit) })
+    if (cursor) query.set('cursor', cursor)
+    return request<HistoryPage>(`/accounts/${accountId}/history?${query}`)
+  },
   deposit: (accountId: string, amount: number) =>
     request<Transaction>('/deposit', { accountId, amount }),
   withdraw: (accountId: string, amount: number) =>

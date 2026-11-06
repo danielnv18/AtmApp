@@ -93,12 +93,15 @@ export class FakeAtm {
       handle: ({ params: [id], query }): HistoryPage => {
         const account = this.find(id)
         const limit = Number(query.get('limit') ?? 50)
-        const items = this.ledger
-          .filter((t) => t.accountId === account.id)
+        const after = Number(query.get('cursor') ?? Infinity)
+        const rows = this.ledger
+          .filter((t) => t.accountId === account.id && t.sequence < after)
           .sort((a, b) => b.sequence - a.sequence)
-          .slice(0, limit)
-          .map(({ sequence: _, ...t }) => t)
-        return { items, nextCursor: null }
+        const page = rows.slice(0, limit)
+        return {
+          items: page.map(({ sequence: _, ...t }) => t),
+          nextCursor: rows.length > limit ? String(page[page.length - 1]!.sequence) : null,
+        }
       },
     },
     {

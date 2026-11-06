@@ -25,7 +25,7 @@ afterEach(() => {
 })
 
 // useAtm keeps module-level state, so every test gets a fresh module graph.
-async function mountLedger(history: Transaction[] | Error) {
+async function mountLedger(history: Transaction[] | Error, nextCursor: string | null = null) {
   vi.resetModules()
   const { atmClient } = await import('@/api/atmClient')
   const { useAtm } = await import('@/composables/useAtm')
@@ -34,12 +34,12 @@ async function mountLedger(history: Transaction[] | Error) {
   const api = vi.mocked(atmClient)
   api.getAccounts.mockResolvedValue([account({ id: 'chk', name: 'Checking' })])
   if (history instanceof Error) api.getHistory.mockRejectedValue(history)
-  else api.getHistory.mockResolvedValue({ items: history, nextCursor: null })
+  else api.getHistory.mockResolvedValue({ items: history, nextCursor })
   await useAtm().refresh()
 
   wrapper = mount(LedgerTable)
   await flushPromises()
-  return wrapper
+  return Object.assign(wrapper, { api })
 }
 
 const rowCells = (w: VueWrapper) =>
@@ -90,6 +90,36 @@ describe('LedgerTable', () => {
     const w = await mountLedger([ledgerRow()])
 
     expect(w.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  describe('pagination', () => {
+    test('is hidden when everything fits on one page', async () => {
+      const w = await mountLedger([ledgerRow()])
+
+      expect(w.find('nav').exists()).toBe(false)
+    })
+
+    test('Older loads the next page, Newer returns to the previous one', async () => {
+      const w = await mountLedger([ledgerRow({ amount: 1 })], 'c1')
+      expect(w.get('[data-testid="page-indicator"]').text()).toBe('Page 1')
+      expect(w.get('[data-testid="page-newer"]').attributes('disabled')).toBeDefined()
+
+      w.api.getHistory.mockResolvedValueOnce({ items: [ledgerRow({ amount: 2 })], nextCursor: null })
+      await w.get('[data-testid="page-older"]').trigger('click')
+      await flushPromises()
+
+      expect(w.api.getHistory).toHaveBeenLastCalledWith('chk', 10, 'c1')
+      expect(w.get('[data-testid="page-indicator"]').text()).toBe('Page 2')
+      expect(w.get('[data-testid="ledger-amount"]').text()).toBe('+$2.00')
+      expect(w.get('[data-testid="page-older"]').attributes('disabled')).toBeDefined()
+
+      w.api.getHistory.mockResolvedValueOnce({ items: [ledgerRow({ amount: 1 })], nextCursor: 'c1' })
+      await w.get('[data-testid="page-newer"]').trigger('click')
+      await flushPromises()
+
+      expect(w.get('[data-testid="page-indicator"]').text()).toBe('Page 1')
+      expect(w.get('[data-testid="ledger-amount"]').text()).toBe('+$1.00')
+    })
   })
 
   describe('day grouping', () => {

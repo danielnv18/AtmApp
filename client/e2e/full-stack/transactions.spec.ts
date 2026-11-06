@@ -121,7 +121,7 @@ test.describe('blocked and rejected amounts', () => {
 test('malformed amounts keep review disabled', async ({ atm }) => {
   await atm.startOperation('Checking', 'Deposit')
 
-  for (const input of ['abc', '1.234', '0']) {
+  for (const input of ['abc', '0', '0.00']) {
     await atm.fillAmount(input)
     await expect(atm.amountInput, `"${input}" is marked invalid`).toHaveAttribute('aria-invalid', 'true')
     await expect(atm.reviewButton('Deposit'), `"${input}" cannot be reviewed`).toBeDisabled()
@@ -130,4 +130,38 @@ test('malformed amounts keep review disabled', async ({ atm }) => {
   await atm.fillAmount('12.34')
   await expect(atm.amountInput, 'a valid amount clears the mark').toHaveAttribute('aria-invalid', 'false')
   await expect(atm.reviewButton('Deposit'), 'a valid amount can be reviewed').toBeEnabled()
+})
+
+test('a third decimal is cut off as the user types', async ({ atm }) => {
+  await atm.startOperation('Checking', 'Deposit')
+
+  await atm.fillAmount('0.03333')
+
+  await expect(atm.amountInput).toHaveValue('0.03')
+  await expect(atm.amountInput).toHaveAttribute('aria-invalid', 'false')
+  await expect(atm.reviewButton('Deposit')).toBeEnabled()
+})
+
+test('activity is paged ten at a time and a new deposit returns to the newest page', async ({ atm, page }) => {
+  const accounts: { id: string; name: string }[] = await (await page.request.get('/api/atm/accounts')).json()
+  const checking = accounts.find((a) => a.name === 'Checking')!
+  for (let i = 0; i < 12; i++) {
+    await page.request.post('/api/atm/deposit', { data: { accountId: checking.id, amount: 1 } })
+  }
+  await atm.open()
+
+  const indicator = atm.ledger.getByTestId('page-indicator')
+  const older = atm.ledger.getByTestId('page-older')
+  const newer = atm.ledger.getByTestId('page-newer')
+  await expect(atm.ledgerRows, 'first page holds ten rows').toHaveCount(10)
+  await expect(newer, 'no newer page from the first page').toBeDisabled()
+
+  await older.click()
+  await expect(indicator).toHaveText('Page 2')
+  await expect(atm.ledgerRows.first(), 'second page is not empty').toBeVisible()
+  await expect(newer).toBeEnabled()
+
+  await atm.deposit('Checking', '5')
+  await expect(indicator, 'a new transaction jumps back to page 1').toHaveText('Page 1')
+  await expect(atm.ledgerRow(0).amount).toHaveText('+$5.00')
 })

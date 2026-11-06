@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { addMoney, formatMoney, fromCents, parseAmount, subtractMoney, sumMoney, toCents } from '@/lib/money'
+import { addMoney, limitDecimals, formatMoney, fromCents, parseAmount, subtractMoney, sumMoney, toCents } from '@/lib/money'
 
 describe('parseAmount', () => {
   test.each([
@@ -76,5 +76,20 @@ describe('cent arithmetic', () => {
     expect(sumMoney(Array.from({ length: 10 }, () => 0.1))).toBe(1)
     expect(sumMoney([])).toBe(0)
     expect(sumMoney([100.1, 200.2])).toBe(300.3)
+  })
+})
+
+describe('limitDecimals', () => {
+  test.each([
+    ['0.03333', '0.03'],
+    ['12.3456', '12.34'],
+    ['1.5', '1.5'],
+    ['1.50', '1.50'],
+    ['1.', '1.'],
+    ['100', '100'],
+    ['', ''],
+    ['abc', 'abc'],
+  ])('%j becomes %j', (input, expected) => {
+    expect(limitDecimals(input)).toBe(expected)
   })
 })
