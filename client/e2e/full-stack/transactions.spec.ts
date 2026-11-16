@@ -212,4 +212,8 @@ test('activity is paged ten at a time and a new deposit returns to the newest pa
   await atm.deposit('Checking', '5')
   await expect(indicator, 'a new transaction jumps back to page 1').toHaveText('Page 1')
   await expect(atm.ledgerRow(0).amount).toHaveText('+$5.00')
+
+  await atm.ledger.getByTestId('page-size').selectOption('100')
+  await expect(atm.ledger.getByTestId('page-older'), 'a bigger page leaves nothing older').toBeDisabled()
+  await expect.poll(() => atm.ledgerRows.count(), 'and shows more than ten rows').toBeGreaterThan(10)
 })

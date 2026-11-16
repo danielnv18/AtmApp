@@ -297,4 +297,67 @@ describe('paging', () => {
     expect(atm.page.value).toBe(1)
     expect(api.getHistory).toHaveBeenLastCalledWith('sav', 10, null)
   })
+
+  test('a failed Older keeps the pager on the page that is on screen', async () => {
+    const { api, atm } = await loaded()
+    const a = ledgerRow()
+    api.getHistory.mockResolvedValueOnce(pageWithMore('c1', a))
+    await atm.showHistory('chk')
+    api.getHistory.mockRejectedValueOnce(new Error('down'))
+
+    await atm.nextPage()
+
+    expect(atm.historyError.value).toBe('down')
+    expect(atm.page.value).toBe(1)
+    expect(atm.history.value).toEqual([a])
+    expect(atm.hasNext.value).toBe(true)
+
+    api.getHistory.mockResolvedValueOnce(page())
+    await atm.nextPage()
+    expect(api.getHistory).toHaveBeenLastCalledWith('chk', 10, 'c1')
+    expect(atm.page.value).toBe(2)
+  })
+
+  test('a failed Newer keeps the pager on the page that is on screen', async () => {
+    const { api, atm } = await loaded()
+    api.getHistory.mockResolvedValueOnce(pageWithMore('c1', ledgerRow())).mockResolvedValueOnce(page())
+    await atm.showHistory('chk')
+    await atm.nextPage()
+    api.getHistory.mockRejectedValueOnce(new Error('down'))
+
+    await atm.previousPage()
+
+    expect(atm.page.value).toBe(2)
+  })
+
+  test('firstPage returns to page 1 and setPageSize restarts paging with the new size', async () => {
+    const { api, atm } = await loaded()
+    api.getHistory.mockResolvedValueOnce(pageWithMore('c1', ledgerRow())).mockResolvedValueOnce(page())
+    await atm.showHistory('chk')
+    await atm.nextPage()
+
+    await atm.firstPage()
+    expect(atm.page.value).toBe(1)
+    expect(api.getHistory).toHaveBeenLastCalledWith('chk', 10, null)
+
+    await atm.nextPage()
+    await atm.setPageSize(100)
+    expect(atm.page.value).toBe(1)
+    expect(atm.pageSize.value).toBe(100)
+    expect(api.getHistory).toHaveBeenLastCalledWith('chk', 100, null)
+  })
+
+  test('there is no cap on how many pages can be followed', async () => {
+    const { api, atm } = await loaded()
+    api.getHistory.mockImplementation(async (_id, _limit, cursor) => {
+      const n = Number(cursor ?? 0) + 1
+      return pageWithMore(String(n), ledgerRow())
+    })
+    await atm.showHistory('chk')
+
+    for (let i = 0; i < 500; i++) await atm.nextPage()
+
+    expect(atm.page.value).toBe(501)
+    expect(atm.hasNext.value).toBe(true)
+  })
 })

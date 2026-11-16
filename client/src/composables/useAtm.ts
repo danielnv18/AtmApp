@@ -12,7 +12,11 @@ const historyError = ref<string | null>(null)
 const pending = ref<Operation | null>(null)
 const loadingHistory = ref(false)
 
-export const PAGE_SIZE = 10
+// The API caps a page at 200 rows but never the number of pages, so any size here can
+// be paged through to the oldest row.
+export const PAGE_SIZES = [10, 25, 50, 100] as const
+export type PageSize = (typeof PAGE_SIZES)[number]
+const pageSize = ref<PageSize>(PAGE_SIZES[0])
 
 // cursors[i] is the cursor that fetches page i. The API pages forward only, so the
 // cursor each page returns is remembered, which is what lets the user step back.
@@ -33,20 +37,24 @@ function resetPaging() {
 // account the user has since left is dropped.
 let historyTicket = 0
 
-async function loadHistory() {
+type LoadResult = 'ok' | 'error' | 'stale'
+
+async function loadHistory(): Promise<LoadResult> {
   const id = ledgerAccountId.value
-  if (id === null) return
+  if (id === null) return 'ok'
   const ticket = ++historyTicket
   loadingHistory.value = true
   try {
-    const result = await atmClient.getHistory(id, PAGE_SIZE, cursors.value[pageIndex.value])
-    if (ticket !== historyTicket) return
+    const result = await atmClient.getHistory(id, pageSize.value, cursors.value[pageIndex.value])
+    if (ticket !== historyTicket) return 'stale'
     history.value = result.items
     nextCursor.value = result.nextCursor
     historyError.value = null
+    return 'ok'
   } catch (e) {
-    if (ticket !== historyTicket) return
+    if (ticket !== historyTicket) return 'stale'
     historyError.value = messageOf(e)
+    return 'error'
   } finally {
     if (ticket === historyTicket) loadingHistory.value = false
   }
@@ -54,14 +62,34 @@ async function loadHistory() {
 
 async function nextPage() {
   if (nextCursor.value === null || loadingHistory.value) return
+  const before = { cursors: cursors.value, index: pageIndex.value }
   cursors.value = [...cursors.value.slice(0, pageIndex.value + 1), nextCursor.value]
   pageIndex.value++
-  await loadHistory()
+  // A failed load must not leave the pager pointing at a page that never rendered.
+  if ((await loadHistory()) === 'error') {
+    cursors.value = before.cursors
+    pageIndex.value = before.index
+  }
 }
 
 async function previousPage() {
   if (pageIndex.value === 0 || loadingHistory.value) return
   pageIndex.value--
+  if ((await loadHistory()) === 'error') pageIndex.value++
+}
+
+async function firstPage() {
+  if (pageIndex.value === 0 || loadingHistory.value) return
+  const before = pageIndex.value
+  pageIndex.value = 0
+  if ((await loadHistory()) === 'error') pageIndex.value = before
+}
+
+async function setPageSize(size: PageSize) {
+  if (size === pageSize.value) return
+  pageSize.value = size
+  // Cursors are row positions, but page boundaries move with the size, so start over.
+  resetPaging()
   await loadHistory()
 }
 
@@ -125,10 +153,13 @@ export function useAtm() {
     pending: readonly(pending),
     loadingHistory: readonly(loadingHistory),
     page,
+    pageSize: readonly(pageSize),
     hasNext,
     hasPrevious,
     nextPage,
     previousPage,
+    firstPage,
+    setPageSize,
     refresh,
     showHistory,
     deposit,

@@ -93,10 +93,40 @@ describe('LedgerTable', () => {
   })
 
   describe('pagination', () => {
-    test('is hidden when everything fits on one page', async () => {
-      const w = await mountLedger([ledgerRow()])
+    test('is hidden when there is no activity', async () => {
+      const w = await mountLedger([])
 
       expect(w.find('nav').exists()).toBe(false)
+    })
+
+    test('a single page disables every page button', async () => {
+      const w = await mountLedger([ledgerRow()])
+
+      for (const id of ['page-first', 'page-newer', 'page-older'])
+        expect(w.get(`[data-testid="${id}"]`).attributes('disabled')).toBeDefined()
+    })
+
+    test('Newest jumps back to page 1 from deep in the history', async () => {
+      const w = await mountLedger([ledgerRow()], 'c1')
+      w.api.getHistory.mockResolvedValueOnce({ items: [ledgerRow()], nextCursor: 'c2' })
+      await w.get('[data-testid="page-older"]').trigger('click')
+      await flushPromises()
+      w.api.getHistory.mockResolvedValueOnce({ items: [ledgerRow()], nextCursor: 'c1' })
+      await w.get('[data-testid="page-first"]').trigger('click')
+      await flushPromises()
+
+      expect(w.get('[data-testid="page-indicator"]').text()).toBe('Page 1')
+      expect(w.api.getHistory).toHaveBeenLastCalledWith('chk', 10, null)
+    })
+
+    test('changing the row count refetches from the newest row with that size', async () => {
+      const w = await mountLedger([ledgerRow()], 'c1')
+      w.api.getHistory.mockResolvedValueOnce({ items: [ledgerRow()], nextCursor: null })
+
+      await w.get('[data-testid="page-size"]').setValue('50')
+      await flushPromises()
+
+      expect(w.api.getHistory).toHaveBeenLastCalledWith('chk', 50, null)
     })
 
     test('Older loads the next page, Newer returns to the previous one', async () => {

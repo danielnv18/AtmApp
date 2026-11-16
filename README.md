@@ -61,7 +61,7 @@ The end-to-end tests start their own API (port 5199) and client (port 5174) on a
 - **Ledger.** Every balance change is an append-only row with a per-account sequence and the resulting `BalanceAfter`. Types are `Deposit`, `Withdrawal`, `TransferIn` and `TransferOut`. A transfer is a `TransferOut` and a `TransferIn` row sharing a `correlationId`, saved atomically.
 - **Money.** Amounts are positive, at most 1,000,000,000.00, with at most 2 decimal places. SQLite stores them as integer cents, because it has no decimal type.
 - **Rules in the database too.** CHECK constraints and triggers (append-only, gapless balance chain) back up the domain checks. A trigger failure is a `500` on purpose, because it means a bug.
-- **History paging.** `GET /api/atm/accounts/{id}/history` takes `limit` and an opaque `cursor`.
+- **History paging.** `GET /api/atm/accounts/{id}/history` takes `limit` (1 to 200, default 50) and an opaque `cursor`, and returns `items` plus `nextCursor` (`null` on the last page). The client pages 10 rows at a time by default (10, 25, 50 or 100) with Newest, Newer and Older buttons. There is no cap on the number of pages.
 - **Idempotency.** Deposit, withdraw and transfer require an `Idempotency-Key` header of 1 to 100 characters. The first request with a key saves its ledger rows and an idempotency record in one database transaction. A repeat of the same request returns the original response and moves no money. A failed request saves nothing, so its key can run again. The client sends a UUID per operation and resends it when the user confirms the same operation after a failure.
 
 ## API errors
@@ -88,6 +88,5 @@ The end-to-end tests start their own API (port 5199) and client (port 5174) on a
 
 - One currency. No authentication, account creation or overdraft.
 - Nothing enforces exactly two accounts or unique account names, and an account balance has no cap.
-- The client loads only the first page of history.
 
 **Operations.** No production build (the client relies on the Vite proxy; the API has no CORS or static hosting), no CI, Docker image or health endpoint, and the OpenAPI document has no `Produces` metadata.
