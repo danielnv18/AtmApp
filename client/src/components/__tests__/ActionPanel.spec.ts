@@ -28,14 +28,21 @@ const checking = () => account({ id: 'chk', name: 'Checking', balance: 100 })
 const savings = () => account({ id: 'sav', name: 'Savings', balance: 500 })
 
 // useAtm keeps module-level state, so every test gets a fresh module graph.
-async function mountPanel(tab: Operation, accountId = 'chk') {
+async function mountPanel(
+  tab: Operation,
+  accountId = 'chk',
+  balances: { chk: number; sav: number } = { chk: 100, sav: 500 },
+) {
   vi.resetModules()
   const { atmClient, ApiError } = await import('@/api/atmClient')
   const { useAtm } = await import('@/composables/useAtm')
   const { default: ActionPanel } = await import('@/components/ActionPanel.vue')
 
   const api = vi.mocked(atmClient)
-  api.getAccounts.mockResolvedValue([checking(), savings()])
+  api.getAccounts.mockResolvedValue([
+    { ...checking(), balance: balances.chk },
+    { ...savings(), balance: balances.sav },
+  ])
   api.getHistory.mockResolvedValue({ items: [], nextCursor: null })
   await useAtm().refresh()
   api.getAccounts.mockClear()
@@ -64,7 +71,7 @@ async function mountPanel(tab: Operation, accountId = 'chk') {
 }
 
 describe('review button', () => {
-  test.each(['', 'abc', '0', '1.234'])('is disabled for amount %j', async (value) => {
+  test.each(['', 'abc', '0', '0.00'])('is disabled for amount %j', async (value) => {
     const { enter, reviewButton } = await mountPanel('deposit')
     await enter(value)
     expect(reviewButton().element.disabled).toBe(true)
@@ -158,7 +165,7 @@ describe('deposit and withdraw', () => {
 
     await confirm()
 
-    expect(api.deposit).toHaveBeenCalledWith('chk', 1234.5)
+    expect(api.deposit).toHaveBeenCalledWith('chk', 1234.5, expect.any(String))
     const receipt = panel.get('[data-testid="receipt"]').text()
     expect(receipt).toContain('Deposit complete')
     expect(receipt).toContain('$1,234.50 deposited to Checking')
@@ -173,7 +180,7 @@ describe('deposit and withdraw', () => {
 
     await confirm()
 
-    expect(api.withdraw).toHaveBeenCalledWith('sav', 50)
+    expect(api.withdraw).toHaveBeenCalledWith('sav', 50, expect.any(String))
     expect(panel.get('[data-testid="receipt"]').text()).toContain('$50.00 withdrawn from Savings')
   })
 
@@ -242,7 +249,7 @@ describe('transfer', () => {
 
     await confirm()
 
-    expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75)
+    expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75, expect.any(String))
     expect(panel.get('[data-testid="receipt"]').text()).toContain('$75.00 moved from Checking to Savings')
   })
 })
@@ -288,5 +295,254 @@ describe('error reporting', () => {
     const alert = panel.get('[role="alert"]').text()
     expect(alert).toContain('Account not found')
     expect(alert).toContain('No account chk.')
+  })
+})
+
+describe('floating point handling', () => {
+  test('a withdrawal of the exact balance is allowed even with binary noise', async () => {
+    const { enter, reviewButton, help } = await mountPanel('withdraw', 'chk', { chk: 0.1 + 0.2, sav: 0 })
+    await enter('0.30')
+
+    expect(reviewButton().element.disabled).toBe(false)
+    expect(help()).toBe('New balance: $0.00')
+  })
+
+  test('one cent over the balance is blocked and the shortfall is exactly one cent', async () => {
+    const { enter, reviewButton, help } = await mountPanel('withdraw', 'chk', { chk: 0.3, sav: 0 })
+    await enter('0.31')
+
+    expect(reviewButton().element.disabled).toBe(true)
+    expect(help()).toContain('$0.01 more than is available')
+  })
+
+  test('the projected balance is exact for awkward decimals', async () => {
+    const { enter, help } = await mountPanel('deposit', 'chk', { chk: 0.1, sav: 0 })
+    await enter('0.2')
+
+    expect(help()).toBe('New balance: $0.30')
+  })
+
+  test('the projected balance after a withdrawal has no trailing noise', async () => {
+    const { enter, help } = await mountPanel('withdraw', 'chk', { chk: 0.3, sav: 0 })
+    await enter('0.1')
+
+    expect(help()).toBe('New balance: $0.20')
+  })
+
+  test('All fills a fractional balance to two decimals and is accepted', async () => {
+    const { button, amountInput, reviewButton } = await mountPanel('withdraw', 'chk', { chk: 1234.56, sav: 0 })
+    await button('All')!.trigger('click')
+
+    expect(amountInput().element.value).toBe('1234.56')
+    expect(reviewButton().element.disabled).toBe(false)
+  })
+
+  test('the amount sent to the API is the exact two-decimal value', async () => {
+    const { api, enter, review, confirm } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 100.07 }))
+    await enter('0.07')
+    await review()
+    await confirm()
+
+    expect(api.deposit).toHaveBeenCalledWith('chk', 0.07, expect.any(String))
+  })
+})
+
+describe('gaps', () => {
+  test('All is hidden when the balance is zero', async () => {
+    const { button } = await mountPanel('withdraw', 'chk', { chk: 0, sav: 0 })
+    expect(button('All')).toBeUndefined()
+  })
+
+  test('a quick amount is highlighted while selected', async () => {
+    const { button } = await mountPanel('deposit')
+    await button('$20')!.trigger('click')
+    expect(button('$20')!.classes()).toContain('border-lime')
+    expect(button('$50')!.classes()).not.toContain('border-lime')
+  })
+
+  test('the review button is disabled while another operation is pending', async () => {
+    const { api, enter, review, button } = await mountPanel('deposit')
+    const call = deferred<Transaction>()
+    api.deposit.mockReturnValue(call.promise)
+    await enter('20')
+    await review()
+    await button('Confirm')!.trigger('click')
+
+    expect(button('Withdraw')!.element.hasAttribute('disabled')).toBe(true)
+
+    call.resolve(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await flushPromises()
+  })
+
+  test('selecting an account card emits the new account', async () => {
+    const { panel } = await mountPanel('deposit')
+    await panel.get('[data-account-name="Savings"]').trigger('click')
+    expect(panel.emitted('update:accountId')?.[0]).toEqual(['sav'])
+  })
+
+  test('selecting an account during review returns to an empty form', async () => {
+    const { enter, review, panel, amountInput } = await mountPanel('deposit')
+    await enter('20')
+    await review()
+
+    await panel.get('[data-account-name="Savings"]').trigger('click')
+    await flushPromises()
+
+    expect(amountInput().element.value).toBe('')
+  })
+
+  test('switching tabs resets the form', async () => {
+    const { enter, panel, amountInput } = await mountPanel('deposit')
+    await enter('20')
+
+    await panel.setProps({ tab: 'withdraw' })
+    await flushPromises()
+
+    expect(amountInput().element.value).toBe('')
+  })
+
+  test('Make another transaction leaves the receipt and shows the form', async () => {
+    const { enter, review, confirm, api, button, panel, amountInput } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+    await button('Make another transaction')!.trigger('click')
+    await flushPromises()
+
+    expect(panel.find('[data-testid="receipt"]').exists()).toBe(false)
+    expect(panel.find('#amount').exists()).toBe(true)
+  })
+
+  test('a failed transfer keeps the form and reports the error', async () => {
+    const { api, ApiError, enter, review, confirm, panel } = await mountPanel('transfer', 'chk')
+    api.transfer.mockRejectedValue(new ApiError(422, 'Unprocessable', 'Not enough.'))
+    await enter('75')
+    await review()
+    await confirm()
+
+    expect(panel.get('[role="alert"]').text()).toContain('Insufficient funds')
+    expect(api.transfer).toHaveBeenCalledWith('chk', 'sav', 75, expect.any(String))
+  })
+})
+
+describe('idempotency key', () => {
+  const keysSent = (call: { mock: { calls: unknown[][] } }) => call.mock.calls.map((args) => args.at(-1))
+  const lostResponse = () => new TypeError('Failed to fetch')
+
+  test('confirming the same deposit again after a failure resends the same key', async () => {
+    const { api, enter, review, confirm, panel } = await mountPanel('deposit')
+    api.deposit.mockRejectedValueOnce(lostResponse()).mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+    expect(panel.get('[role="alert"]').text()).toContain('Could not reach the server')
+
+    await review()
+    await confirm()
+
+    const [first, retry] = keysSent(api.deposit)
+    expect(first).toEqual(expect.any(String))
+    expect(retry).toBe(first)
+    expect(panel.get('[data-testid="receipt"]').text()).toContain('Deposit complete')
+  })
+
+  test('a retried transfer resends the same key', async () => {
+    const { api, enter, review, confirm } = await mountPanel('transfer', 'chk')
+    api.transfer.mockRejectedValueOnce(lostResponse()).mockResolvedValue(
+      transferReceipt({ accountId: 'chk', balanceAfter: 25 }, { accountId: 'sav', balanceAfter: 575 }, 75),
+    )
+    await enter('75')
+    await review()
+    await confirm()
+    await review()
+    await confirm()
+
+    const [first, retry] = keysSent(api.transfer)
+    expect(retry).toBe(first)
+  })
+
+  test('changing the amount after a failure sends a new key', async () => {
+    const { api, enter, review, confirm } = await mountPanel('deposit')
+    api.deposit.mockRejectedValueOnce(lostResponse()).mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 125 }))
+    await enter('20')
+    await review()
+    await confirm()
+
+    await enter('25')
+    await review()
+    await confirm()
+
+    expect(api.deposit.mock.calls.map(([, amount]) => amount)).toEqual([20, 25])
+    const [first, second] = keysSent(api.deposit)
+    expect(second).not.toBe(first)
+  })
+
+  test('the same deposit after a success sends a new key', async () => {
+    const { api, enter, review, confirm, button } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+    await button('Make another transaction')!.trigger('click')
+    await flushPromises()
+
+    await enter('20')
+    await review()
+    await confirm()
+
+    const [first, second] = keysSent(api.deposit)
+    expect(second).not.toBe(first)
+  })
+
+  test('leaving the tab after a failure and coming back to the same deposit keeps the key', async () => {
+    const { api, enter, review, confirm, panel } = await mountPanel('deposit')
+    api.deposit.mockRejectedValueOnce(lostResponse()).mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 120 }))
+    await enter('20')
+    await review()
+    await confirm()
+
+    await panel.setProps({ tab: 'withdraw' })
+    await panel.setProps({ tab: 'deposit' })
+    await flushPromises()
+    await enter('20')
+    await review()
+    await confirm()
+
+    const [first, retry] = keysSent(api.deposit)
+    expect(retry).toBe(first)
+  })
+})
+
+describe('decimal places', () => {
+  test.each([
+    ['0.03333', '0.03'],
+    ['1.234', '1.23'],
+    ['10.999', '10.99'],
+    ['5.00', '5.00'],
+    ['5.5', '5.5'],
+  ])('typing %j leaves %j in the field', async (typed, shown) => {
+    const { enter, amountInput } = await mountPanel('deposit')
+    await enter(typed)
+    expect(amountInput().element.value).toBe(shown)
+  })
+
+  test('a third decimal is cut off and the amount stays valid', async () => {
+    const { enter, help, reviewButton } = await mountPanel('deposit')
+    await enter('0.03333')
+
+    expect(help()).toBe('New balance: $100.03')
+    expect(reviewButton().element.disabled).toBe(false)
+  })
+
+  test('the API receives the two-decimal amount', async () => {
+    const { api, enter, review, confirm } = await mountPanel('deposit')
+    api.deposit.mockResolvedValue(ledgerRow({ accountId: 'chk', balanceAfter: 100.03 }))
+    await enter('0.03333')
+    await review()
+    await confirm()
+
+    expect(api.deposit).toHaveBeenCalledWith('chk', 0.03, expect.any(String))
   })
 })

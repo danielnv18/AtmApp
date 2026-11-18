@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RefreshCwIcon } from '@lucide/vue'
 import { useAtm } from '@/composables/useAtm'
+import { sumMoney } from '@/lib/money'
 import type { Operation } from '@/types'
 import ActionPanel from '@/components/ActionPanel.vue'
 import AnimatedMoney from '@/components/AnimatedMoney.vue'
@@ -17,7 +18,7 @@ const actionAccountId = ref<string>()
 const refreshing = ref(false)
 const updatedAt = ref<Date>()
 
-const total = computed(() => accounts.value.reduce((sum, a) => sum + a.balance, 0))
+const total = computed(() => sumMoney(accounts.value.map((a) => a.balance)))
 const time = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' })
 
 async function load() {

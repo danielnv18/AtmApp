@@ -1,5 +1,7 @@
 using AtmApp.Api.Application;
 using AtmApp.Api.Domain;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
 
 namespace AtmApp.Api.Endpoints;
 
@@ -7,6 +9,7 @@ public static class AtmEndpoints
 {
     private const int MinHistoryLimit = 1;
     private const int MaxHistoryLimit = 200;
+    private const string IdempotencyKeyHeader = "Idempotency-Key";
 
     public static IEndpointRouteBuilder MapAtmEndpoints(this IEndpointRouteBuilder routes)
     {
@@ -41,28 +44,51 @@ public static class AtmEndpoints
                 page.Next is null ? null : CursorToken.Encode(page.Next)));
         });
 
-        atm.MapPost("/deposit", async (AmountRequest body, IAccountService service, CancellationToken ct) =>
+        atm.MapPost("/deposit", async Task<Results<Ok<TransactionResponse>, ProblemHttpResult>> (
+            AmountRequest body, [FromHeader(Name = IdempotencyKeyHeader)] string? key, IAccountService service, CancellationToken ct) =>
         {
+            if (!IdempotencyKey.TryParse(key, out var idempotencyKey))
+            {
+                return InvalidIdempotencyKey();
+            }
+
             var amount = Money.Parse(body.Amount);
-            return TransactionResponse.From(await service.DepositAsync(body.AccountId, amount, ct));
+            return TypedResults.Ok(TransactionResponse.From(await service.DepositAsync(idempotencyKey, body.AccountId, amount, ct)));
         });
 
-        atm.MapPost("/withdraw", async (AmountRequest body, IAccountService service, CancellationToken ct) =>
+        atm.MapPost("/withdraw", async Task<Results<Ok<TransactionResponse>, ProblemHttpResult>> (
+            AmountRequest body, [FromHeader(Name = IdempotencyKeyHeader)] string? key, IAccountService service, CancellationToken ct) =>
         {
+            if (!IdempotencyKey.TryParse(key, out var idempotencyKey))
+            {
+                return InvalidIdempotencyKey();
+            }
+
             var amount = Money.Parse(body.Amount);
-            return TransactionResponse.From(await service.WithdrawAsync(body.AccountId, amount, ct));
+            return TypedResults.Ok(TransactionResponse.From(await service.WithdrawAsync(idempotencyKey, body.AccountId, amount, ct)));
         });
 
-        atm.MapPost("/transfer", async (TransferRequest body, IAccountService service, CancellationToken ct) =>
+        atm.MapPost("/transfer", async Task<Results<Ok<TransferResponse>, ProblemHttpResult>> (
+            TransferRequest body, [FromHeader(Name = IdempotencyKeyHeader)] string? key, IAccountService service, CancellationToken ct) =>
         {
+            if (!IdempotencyKey.TryParse(key, out var idempotencyKey))
+            {
+                return InvalidIdempotencyKey();
+            }
+
             var amount = Money.Parse(body.Amount);
-            var receipt = await service.TransferAsync(body.FromAccountId, body.ToAccountId, amount, ct);
-            return new TransferResponse(
+            var receipt = await service.TransferAsync(idempotencyKey, body.FromAccountId, body.ToAccountId, amount, ct);
+            return TypedResults.Ok(new TransferResponse(
                 receipt.CorrelationId,
                 TransactionResponse.From(receipt.TransferOut),
-                TransactionResponse.From(receipt.TransferIn));
+                TransactionResponse.From(receipt.TransferIn)));
         });
 
         return routes;
     }
+
+    private static ProblemHttpResult InvalidIdempotencyKey() => TypedResults.Problem(
+        title: "Invalid idempotency key",
+        detail: $"Send an {IdempotencyKeyHeader} header of 1 to {IdempotencyKey.MaxLength} characters, such as a new UUID for each operation.",
+        statusCode: StatusCodes.Status400BadRequest);
 }

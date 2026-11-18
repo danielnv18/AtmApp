@@ -1,6 +1,7 @@
 using AtmApp.Api.Domain;
 using AtmApp.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using static System.FormattableString;
 
 namespace AtmApp.Api.Application;
 
@@ -37,44 +38,105 @@ public sealed class AccountService(AtmDbContext db, TimeProvider clock) : IAccou
         return new HistoryPage(items, next);
     }
 
-    public async Task<Transaction> DepositAsync(Guid accountId, Money amount, CancellationToken ct = default)
+    public async Task<Transaction> DepositAsync(IdempotencyKey key, Guid accountId, Money amount, CancellationToken ct = default)
     {
-        var account = await LoadAsync(accountId, ct);
-        var ledgerRow = account.Deposit(amount, clock.GetUtcNow());
-        db.Transactions.Add(ledgerRow);
-        await db.SaveChangesAsync(ct);
-        return ledgerRow;
+        var rows = await OnceAsync(key, Invariant($"deposit {accountId} {amount.Value:0.00}"), async () =>
+        {
+            var account = await LoadAsync(accountId, ct);
+            return [account.Deposit(amount, clock.GetUtcNow())];
+        }, ct);
+        return rows.Single();
     }
 
-    public async Task<Transaction> WithdrawAsync(Guid accountId, Money amount, CancellationToken ct = default)
+    public async Task<Transaction> WithdrawAsync(IdempotencyKey key, Guid accountId, Money amount, CancellationToken ct = default)
     {
-        var account = await LoadAsync(accountId, ct);
-        var ledgerRow = account.Withdraw(amount, clock.GetUtcNow());
-        db.Transactions.Add(ledgerRow);
-        await db.SaveChangesAsync(ct);
-        return ledgerRow;
+        var rows = await OnceAsync(key, Invariant($"withdraw {accountId} {amount.Value:0.00}"), async () =>
+        {
+            var account = await LoadAsync(accountId, ct);
+            return [account.Withdraw(amount, clock.GetUtcNow())];
+        }, ct);
+        return rows.Single();
     }
 
-    public async Task<TransferReceipt> TransferAsync(Guid fromAccountId, Guid toAccountId, Money amount, CancellationToken ct = default)
+    public async Task<TransferReceipt> TransferAsync(
+        IdempotencyKey key, Guid fromAccountId, Guid toAccountId, Money amount, CancellationToken ct = default)
     {
         if (fromAccountId == toAccountId)
         {
             throw new DomainException(DomainError.SameAccountTransfer);
         }
 
-        var from = await LoadAsync(fromAccountId, ct);
-        var to = await LoadAsync(toAccountId, ct);
-        var correlationId = Guid.NewGuid();
-        var now = clock.GetUtcNow();
+        var rows = await OnceAsync(key, Invariant($"transfer {fromAccountId} {toAccountId} {amount.Value:0.00}"), async () =>
+        {
+            var from = await LoadAsync(fromAccountId, ct);
+            var to = await LoadAsync(toAccountId, ct);
+            var correlationId = Guid.NewGuid();
+            var now = clock.GetUtcNow();
+            return
+            [
+                from.SendTransfer(amount, now, correlationId, $"Transfer to {to.Name}"),
+                to.ReceiveTransfer(amount, now, correlationId, $"Transfer from {from.Name}"),
+            ];
+        }, ct);
 
-        var withdrawal = from.SendTransfer(amount, now, correlationId, $"Transfer to {to.Name}");
-        var deposit = to.ReceiveTransfer(amount, now, correlationId, $"Transfer from {from.Name}");
-        db.Transactions.AddRange(withdrawal, deposit);
-        // One SaveChanges runs both balance updates and both ledger inserts in a single database
-        // transaction. If either account changed underneath us, the whole transfer rolls back.
-        await db.SaveChangesAsync(ct);
+        var transferOut = rows.Single(t => t.Type == TransactionType.TransferOut);
+        var transferIn = rows.Single(t => t.Type == TransactionType.TransferIn);
+        return new TransferReceipt(transferOut.CorrelationId!.Value, transferOut, transferIn);
+    }
 
-        return new TransferReceipt(correlationId, withdrawal, deposit);
+    // Runs an operation at most once per key. apply changes the tracked accounts and returns the
+    // operation's new ledger rows; the key's record points at the first. A repeat of the same
+    // request returns the rows the first run saved, and a different request with the key is rejected.
+    private async Task<IReadOnlyList<Transaction>> OnceAsync(
+        IdempotencyKey key, string request, Func<Task<Transaction[]>> apply, CancellationToken ct)
+    {
+        if (await SavedRowsAsync(key, request, ct) is { } saved)
+        {
+            return saved;
+        }
+
+        var rows = await apply();
+        db.Transactions.AddRange(rows);
+        db.IdempotencyRecords.Add(IdempotencyRecord.For(key, request, rows[0], clock.GetUtcNow()));
+        try
+        {
+            // One SaveChanges runs the balance updates, the ledger inserts and the record insert in
+            // a single database transaction. If an account changed underneath us, or the key was
+            // saved meanwhile, all of it rolls back.
+            await db.SaveChangesAsync(ct);
+            return rows;
+        }
+        catch (DbUpdateException)
+        {
+            // A concurrent request with the same key may have committed between our lookup and our
+            // save. If so, answer as it did. Otherwise this was an ordinary conflict or failure.
+            db.ChangeTracker.Clear();
+            if (await SavedRowsAsync(key, request, ct) is { } winner)
+            {
+                return winner;
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<IReadOnlyList<Transaction>?> SavedRowsAsync(IdempotencyKey key, string request, CancellationToken ct)
+    {
+        var record = await db.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(r => r.Key == key.Value, ct);
+        if (record is null)
+        {
+            return null;
+        }
+
+        if (record.Request != request)
+        {
+            throw new IdempotencyKeyReusedException();
+        }
+
+        var first = await db.Transactions.AsNoTracking().SingleAsync(t => t.Id == record.TransactionId, ct);
+        return first.CorrelationId is { } correlationId
+            ? await db.Transactions.AsNoTracking().Where(t => t.CorrelationId == correlationId).ToListAsync(ct)
+            : [first];
     }
 
     private async Task<Account> LoadAsync(Guid accountId, CancellationToken ct) =>

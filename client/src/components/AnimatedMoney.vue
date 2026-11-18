@@ -5,7 +5,7 @@ import { formatMoney } from '@/lib/money'
 
 const props = defineProps<{ value: number }>()
 const tweened = useTweenedNumber(() => props.value)
-const text = computed(() => formatMoney(Math.round(tweened.value * 100) / 100))
+const text = computed(() => formatMoney(tweened.value))
 </script>
 
 <template>

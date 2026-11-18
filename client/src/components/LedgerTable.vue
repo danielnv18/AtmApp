@@ -1,12 +1,29 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Transaction } from '@/types'
-import { useAtm } from '@/composables/useAtm'
+import { PAGE_SIZES, useAtm, type PageSize } from '@/composables/useAtm'
 import { formatMoney } from '@/lib/money'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
-const { accounts, ledgerAccountId, history, historyError } = useAtm()
+const {
+  accounts,
+  ledgerAccountId,
+  history,
+  historyError,
+  loadingHistory,
+  page,
+  pageSize,
+  hasNext,
+  hasPrevious,
+  nextPage,
+  previousPage,
+  firstPage,
+  setPageSize,
+} = useAtm()
+
+const onPageSize = (e: Event) => void setPageSize(Number((e.target as HTMLSelectElement).value) as PageSize)
 
 const TYPE_META: Record<Transaction['type'], { label: string; credit: boolean }> = {
   Deposit: { label: 'Deposit', credit: true },
@@ -52,7 +69,7 @@ const groups = computed(() => {
       <CardTitle class="text-teal text-2xl">Activity</CardTitle>
       <CardDescription v-if="accountName">{{ accountName }}</CardDescription>
     </CardHeader>
-    <CardContent class="grid gap-4">
+    <CardContent class="grid gap-4" :aria-busy="loadingHistory">
       <Alert v-if="historyError" variant="destructive">
         <AlertTitle>Could not load history</AlertTitle>
         <AlertDescription>{{ historyError }}</AlertDescription>
@@ -86,6 +103,32 @@ const groups = computed(() => {
           </li>
         </TransitionGroup>
       </section>
+      <nav v-if="history.length > 0 || hasPrevious" class="flex flex-wrap items-center justify-between gap-2 border-t pt-3" aria-label="Activity pages">
+        <label class="text-muted-foreground flex items-center gap-1.5 text-xs">
+          Rows
+          <select
+            class="border-input bg-background text-foreground rounded-md border px-1.5 py-1 text-xs"
+            :value="pageSize"
+            :disabled="loadingHistory"
+            data-testid="page-size"
+            @change="onPageSize"
+          >
+            <option v-for="n in PAGE_SIZES" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </label>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" :disabled="!hasPrevious || loadingHistory" data-testid="page-first" @click="firstPage">
+            Newest
+          </Button>
+          <Button variant="outline" size="sm" :disabled="!hasPrevious || loadingHistory" data-testid="page-newer" @click="previousPage">
+            Newer
+          </Button>
+          <span class="text-muted-foreground min-w-14 text-center text-xs tabular-nums" aria-live="polite" data-testid="page-indicator">Page {{ page }}</span>
+          <Button variant="outline" size="sm" :disabled="!hasNext || loadingHistory" data-testid="page-older" @click="nextPage">
+            Older
+          </Button>
+        </div>
+      </nav>
     </CardContent>
   </Card>
 </template>

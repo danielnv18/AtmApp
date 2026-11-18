@@ -121,6 +121,43 @@ public sealed class PersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Database_rejects_a_second_idempotency_record_for_the_same_key()
+    {
+        await InsertIdempotencyRecordAsync("key-1", await OpeningDepositIdAsync("Checking"));
+
+        var ex = await Assert.ThrowsAsync<SqliteException>(
+            async () => await InsertIdempotencyRecordAsync("key-1", await OpeningDepositIdAsync("Savings")));
+
+        Assert.Contains("UNIQUE constraint failed", ex.Message);
+    }
+
+    [Fact]
+    public async Task Database_rejects_an_idempotency_record_for_a_ledger_row_that_does_not_exist()
+    {
+        var ex = await Assert.ThrowsAsync<SqliteException>(() => InsertIdempotencyRecordAsync("key-1", Guid.NewGuid()));
+
+        Assert.Contains("FOREIGN KEY constraint failed", ex.Message);
+    }
+
+    private async Task<Guid> OpeningDepositIdAsync(string accountName)
+    {
+        await using var db = NewContext();
+        var account = await db.Accounts.SingleAsync(a => a.Name == accountName);
+        return (await db.Transactions.SingleAsync(t => t.AccountId == account.Id)).Id;
+    }
+
+    private async Task InsertIdempotencyRecordAsync(string key, Guid transactionId)
+    {
+        await using var db = NewContext();
+        // EF stores Guids as uppercase TEXT in SQLite; the FK compares the text exactly.
+        var id = transactionId.ToString().ToUpperInvariant();
+        await db.Database.ExecuteSqlAsync($"""
+            INSERT INTO "IdempotencyRecords" ("Key", "Request", "TransactionId", "CreatedUtc")
+            VALUES ({key}, 'deposit', {id}, 0)
+            """);
+    }
+
+    [Fact]
     public async Task Concurrent_debits_cannot_both_succeed_and_the_loser_writes_nothing()
     {
         await using var first = NewContext();

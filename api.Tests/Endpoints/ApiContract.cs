@@ -25,6 +25,8 @@ public sealed record ProblemView(int Status, string Title, string Detail);
 
 public static class ApiContract
 {
+    public const string IdempotencyKey = "Idempotency-Key";
+
     private static readonly JsonSerializerOptions Strict = new(JsonSerializerDefaults.Web)
     {
         RespectRequiredConstructorParameters = true,
